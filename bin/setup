@@ -1,5 +1,4 @@
 #!/bin/sh
-
 # The main setup file - entire setup hierarchy starts here
 
 set -e
@@ -30,7 +29,6 @@ case "${unameOut}" in
         OS="UNKNOWN"
         ;;
 esac
-
 
 source "$SETUP_DIR"/setup-home
 # "$SETUP_DIR"/setup-links
