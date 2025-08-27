@@ -1,0 +1,148 @@
+general {
+    interval = 1
+}
+
+#order += "ipv6"
+#order += "run_watch DHCP"
+#order += "run_watch VPNC"
+order += "path_exists VPN"
+order += "wireless wlp4s0"
+#order += "ethernet enp0s31f6"
+#order += "cpu_temperature 0"
+#order += "load"
+#order += "memory"
+#order += "disk /"
+order += "spotify"
+order += "volume_status"
+order += "battery 0"
+order += "battery 1"
+order += "tztime local"
+#order += "tztime boston"
+
+wireless wlp4s0 {
+   format_up = "W:%quality %bitrate %ip"
+   format_down = "W: down"
+}
+
+ethernet enp0s31f6 {
+   format_up = "E: %ip (%speed)"
+   format_down = "E: down"
+}
+
+battery 0 {
+   format = "%status %percentage"
+   format_down = "No battery"
+   status_chr = "⚡"
+   status_bat = "🔋"
+   status_unk = "? UNK"
+   status_full = "☻ FULL"
+   path = "/sys/class/power_supply/BAT%d/uevent"
+   low_threshold = 10
+   last_full_capacity = true
+}
+battery 1 {
+   format = "%status %percentage"
+   format_down = "No battery"
+   status_chr = "⚡"
+   status_bat = "🔋"
+   status_unk = "? UNK"
+   status_full = "☻ FULL"
+   path = "/sys/class/power_supply/BAT%d/uevent"
+   low_threshold = 10
+   last_full_capacity = true
+}
+
+volume_status {
+    thresholds = [
+        (0, "#FFFFFF"),
+        (5, "#F7FFFA"),
+        (10, "#EEFFEE"),
+        (15, "#E6FFE2"),
+        (20, "#DDFFD6"),
+        (25, "#D4FFCA"),
+        (30, "#CCFFBE"),
+        (35, "#C3FFB2"),
+        (40, "#BAFFA6"),
+        (45, "#B1FF9A"),
+        (50, "#A9FF8E"),
+        (55, "#A0FF82"),
+        (60, "#97FF76"),
+        (65, "#8FFF6A"),
+        (70, "#86FF5E"),
+        (75, "#7DFF52"),
+        (80, "#74FF46"),
+        (85, "#6CFF3A"),
+        (90, "#63FF2E"),
+        (95, "#5AFF22"),
+        (100, "#00FF00"),
+        (105, "#33CC33"),
+        (110, "#66AA66"),
+        (115, "#998899"),
+        (120, "#CC66CC"),
+        (125, "#FF33FF"),
+        (130, "#FF66CC"),
+        (135, "#FF9999"),
+        (140, "#FFCC66"),
+        (145, "#FFFF33"),
+        (150, "#FFFF00"),
+        (155, "#FFCC00"),
+        (160, "#FF9900"),
+        (165, "#FF6600"),
+        (170, "#FF3300"),
+        (175, "#FF0000"),
+        (180,"#CC0000")
+    ]
+    cache_timeout = 1
+}
+
+run_watch DHCP {
+    pidfile = "/var/run/dhclient*.pid"
+}
+
+run_watch VPNC {
+    pidfile = "/var/run/vpnc/pid"
+}
+
+spotify {
+    cache_timeout = 1
+    format = "{title} - {artist}"
+    color_playing = "#A579F3"
+}
+
+path_exists VPN {
+   path = "/proc/sys/net/ipv4/conf/tun0"
+}
+
+tztime local {
+   format = "%Y-%m-%d %H:%M:%S %Z"
+   #hide_if_equals_localtime = true
+}
+
+# for more time zones: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+tztime boston {
+   format = "%Y-%m-%d %H:%M:%S %Z"
+   timezone = "America/Lima"
+}
+
+load {
+   format = "%5min"
+}
+
+#   cpu_temperature 0 {
+#       format = "T: %degrees °C"
+#       path = "/sys/devices/platform/coretemp.0/temp1_input"
+#   }
+
+memory {
+   format = "%used"
+   threshold_degraded = "10%"
+   format_degraded = "MEMORY: %free"
+}
+
+disk "/" {
+   format = "%free"
+}
+
+read_file uptime {
+   path = "/proc/uptime"
+}

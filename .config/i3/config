@@ -1,0 +1,187 @@
+####################################################################################################
+# Preliminary
+####################################################################################################
+# Config home (default unless XDG_CONFIG_HOME defined)
+# Used throughout config files
+set $config ${XDG_CONFIG_HOME:-$HOME/.config}
+
+# Mod keys + Xmodmap
+set $mod Mod4
+set $caps Mod3
+set $alt Mod1
+exec_always xmodmap $config/.Xmodmap
+
+####################################################################################################
+# Run config files
+####################################################################################################
+include $config/i3/conf/*.conf
+
+####################################################################################################
+# Font
+####################################################################################################
+font pango:Fira Code Retina 10
+
+####################################################################################################
+# Border
+####################################################################################################
+set $border_size 1
+default_border pixel $border_size
+default_floating_border pixel $border_size
+
+# Some apps (Firefox) don't listen to above but might have good reason so set overrule case-by-case
+for_window [class="firefox.*"] border pixel $border_size
+
+# Draw only when more than one window
+smart_borders on
+
+####################################################################################################
+# Gaps
+####################################################################################################
+gaps inner 10
+bindsym $mod+$caps+0 gaps inner all set 0
+bindsym $mod+Shift+$caps+0 gaps outer all set 0
+bindsym $mod+$caps+plus gaps inner current plus 1
+bindsym $mod+$caps+minus gaps inner current minus 1
+bindsym $mod+Shift+$caps+plus gaps outer current plus 1
+bindsym $mod+Shift+$caps+minus gaps outer current minus 1
+
+# Draw only when more than one window
+smart_gaps on
+
+####################################################################################################
+# New windows
+####################################################################################################
+# Open new windows to the left in splith mode
+#assign [class=".*"] focus left
+
+####################################################################################################
+# Color
+####################################################################################################
+set_from_resource $darkred     color1  #000000
+set_from_resource $red         color9  #000000
+set_from_resource $darkgreen   color2  #000000
+set_from_resource $green       color10 #000000
+set_from_resource $darkyellow  color3  #000000
+set_from_resource $yellow      color11 #000000
+set_from_resource $darkblue    color4  #000000
+set_from_resource $blue        color12 #000000
+set_from_resource $darkmagenta color5  #000000
+set_from_resource $magenta     color13 #000000
+set_from_resource $darkcyan    color6  #000000
+set_from_resource $cyan        color14 #000000
+set_from_resource $darkwhite   color7  #000000
+set_from_resource $white       color15 #000000
+
+# Use custom colors for black
+set $black       #282828
+set $darkblack   #1d2021
+set $transparent #00000000
+set $olive 	#4b8501
+
+# set $border #d65d0e
+# set $border #6ae95a
+set $border #31c301
+
+# class                 border  backgr. text    indicator child_border
+client.focused          $olive  $olive  #fbf1c7 $olive    $olive
+client.focused_inactive #282828 #282828 #fbf1c7 #282828   #282828
+client.unfocused        #282828 #282828 #fbf1c7 #282828   #282828
+client.urgent           #2f343a #900000 #ffffff #900000   #900000
+client.placeholder      #000000 #0c0c0c #ffffff #000000   #0c0c0c
+client.background       #ffffff
+
+####################################################################################################
+# Mouse
+####################################################################################################
+exec --no-startup-id xrdb merge ~/.Xresources
+
+####################################################################################################
+# Untouched i3 defaults
+####################################################################################################
+# This font is widely installed, provides lots of unicode glyphs, right-to-left
+# text rendering and scalability on retina/hidpi displays (thanks to pango).
+#font pango:DejaVu Sans Mono 8
+
+# NetworkManager is the most popular way to manage wireless networks on Linux,
+# and nm-applet is a desktop environment-independent system tray GUI for it.
+exec --no-startup-id nm-applet
+
+# Use Mouse+$mod to drag floating windows to their wanted position
+floating_modifier $mod
+
+# change focus
+bindsym $mod+j focus left
+bindsym $mod+k focus down
+bindsym $mod+l focus up
+bindsym $mod+semicolon focus right
+
+# alternatively, you can use the cursor keys:
+bindsym $mod+Left focus left
+bindsym $mod+Down focus down
+bindsym $mod+Up focus up
+bindsym $mod+Right focus right
+
+# move focused window
+bindsym $mod+Shift+j move left
+bindsym $mod+Shift+k move down
+bindsym $mod+Shift+l move up
+bindsym $mod+Shift+semicolon move right
+
+# alternatively, you can use the cursor keys:
+bindsym $mod+Shift+Left move left
+bindsym $mod+Shift+Down move down
+bindsym $mod+Shift+Up move up
+bindsym $mod+Shift+Right move right
+
+# split in horizontal orientation
+bindsym $mod+h split h
+
+# split in vertical orientation
+bindsym $mod+v split v
+
+# enter fullscreen mode for the focused container
+bindsym $mod+f fullscreen toggle
+
+# change container layout (stacked, tabbed, toggle split)
+bindsym $mod+s layout stacking
+#bindsym $mod+w layout tabbed
+#bindsym $mod+e layout toggle split
+
+# toggle tiling / floating
+bindsym $mod+Shift+space floating toggle
+
+# change focus between tiling / floating windows
+bindsym $mod+space focus mode_toggle
+
+# focus the parent container
+bindsym $mod+a focus parent
+
+# focus the child container
+#bindsym $mod+d focus child
+
+# reload the configuration file
+bindsym $mod+Shift+c reload
+
+# resize window (you can also use the mouse for that)
+mode "resize" {
+        # These bindings trigger as soon as you enter the resize mode
+
+        # Pressing left will shrink the window’s width.
+        # Pressing right will grow the window’s width.
+        # Pressing up will shrink the window’s height.
+        # Pressing down will grow the window’s height.
+        bindsym j resize shrink width 10 px or 10 ppt
+        bindsym k resize grow height 10 px or 10 ppt
+        bindsym l resize shrink height 10 px or 10 ppt
+        bindsym semicolon resize grow width 10 px or 10 ppt
+
+        # same bindings, but for the arrow keys
+        bindsym Left resize shrink width 10 px or 10 ppt
+        bindsym Down resize grow height 10 px or 10 ppt
+        bindsym Up resize shrink height 10 px or 10 ppt
+        bindsym Right resize grow width 10 px or 10 ppt
+
+        # back to normal: Enter or Escape
+        bindsym Return mode "default"
+        bindsym Escape mode "default"
+}
