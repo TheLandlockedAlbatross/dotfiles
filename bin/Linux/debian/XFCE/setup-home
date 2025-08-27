@@ -1,14 +1,23 @@
 #!/bin/sh
-set -e
 
-base_installs="cmake cron curl feh ffmpeg ffmpegthumbnailer ffmpegthumbs flameshot firmware-iwlwifi firmware-linux firmware-linux-nonfree firmware-misc-nonfree flatpak fzf gcc gnupg gparted gpg inxi jq lsof lshw make man-db meson moreutils neofetch nitrogen nodejs npm rename restic ripgrep rsync sxhkd tasksel tasksel-data tar tmuxinator traceroute tree unrar unzip valgrind vim vim-common vlc xclip xdotool xfonts-base xsct xsel xss-lock yazi zip zsh zsh-doc"
+# First install things I tend to want on all systems
+base_installs=(chromium cmake cron curl eza feh ffmpeg ffmpegthumbnailer ffmpegthumbs flameshot firmware-linux firmware-linux-nonfree firmware-misc-nonfree flatpak fzf gcc gnupg gparted gpg inxi jq lsof lshw make man-db meson moreutils neofetch nitrogen npm rename restic ripgrep rsync safe-rm tasksel tasksel-data tar tmuxinator traceroute tree unzip valgrind vim vim-common vlc xclip xdotool xsct xsel xss-lock yazi zip zsh zsh-doc)
+sudo apt-get install -y ${base_installs[@]}
 
-for base_install in "${base_installs[@]}"; do
-    sudo apt-get install -y "${base_install}"
-done
+# then some xfce4 specific extras
+xfce4_installs=(xfce4-eyes-plugin xfce4-goodies xfce4-mount-plugin xfce4-netload-plugin xfce4-notifyd xfce4-panel xfce4-power-manager xfce4-sensors-plugin xfce4-terminal xfce4-wavelan-plugin xfce4-whiskermenu-plugin)
+sudo apt-get install -y ${xfce4_installs[@]}
 
-alt_installs="eza safe-rm"
+# flatpaks
+sudo apt-get install -y flatpak
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install -y flathub com.calibre_ebook.calibre com.github.tchx84.Flatseal io.freetubeapp.FreeTube io.missioncenter.MissionCenter org.gimp.GIMP
 
+# i3 + utils my i3 config needs
 i3_installs="i3 i3blocks picom sanoid sxhkd yad"
+sudo apt-get install -y ${i3_installs[@]}
 
-xfce4_addons="xfce4-eyes-plugin xfce4-goodies xfce4-mount-plugin xfce4-netload-plugin xfce4-notifyd xfce4-panel xfce4-power-manager xfce4-sensors-plugin xfce4-terminal xfce4-wavelan-plugin xfce4-whiskermenu-plugin "
+# Change shell to zsh
+
+
+

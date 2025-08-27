@@ -1,8 +1,6 @@
 #!/bin/sh
 # The main setup file - entire setup hierarchy starts here
 
-set -e
-
 # Determine OS
 unameOut="$(uname -s)"
 case "${unameOut}" in
