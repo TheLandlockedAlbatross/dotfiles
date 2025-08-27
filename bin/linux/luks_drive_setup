@@ -1,0 +1,78 @@
+#!/bin/bash
+####################################################################################################
+# Description: Check hard drive for errors
+####################################################################################################
+
+SCRIPT_DIR=$(realpath $(dirname "${BASH_SOURCE[0]}"))
+MOUNTED_INITIALLY=""
+VERBOSE_FLAG=""
+
+printf_verbose() {
+    if [[ -n "${VERBOSE_FLAG}" ]]; then
+        printf "$1"
+    fi
+}
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run as root or use sudo."
+    exit 1
+else
+    printf_verbose "Running with root privileges.\n"
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -h | --help)
+            usage;;
+        -c | --crypt-name)
+            CRPYT_NAME="${1}"
+            shift;;
+        -v | --verbose)
+            VERBOSE_FLAG=1
+            shift;;
+        *)
+            target="${1}"
+            shift;
+    esac
+done
+
+if [[ -z "${target}" ]]; then
+    echo "Please provide a target device (/dev/...)"
+    exit 1
+fi
+
+
+# Check if the target is mounted
+if mountpoint -q "${target}"; then
+    MOUNTED_INITIALLY=1
+    printf_verbose "Unmounting ${target}...\n"
+    umount "${target}"
+else
+    printf_verbose "${target} is not mounted, skipping unmount.\n"
+fi
+
+printf_verbose "Scanning for bad blocks on ${target}...\n"
+badblocks -b 4096 -e 5 -s -v "${target}"
+
+if [[ $! -eq 0 && -n "${CRPYT_NAME}" ]]; then
+    keyfile="SAVE_AND_DELETE_$(date +%s).luks"
+    tr -dc 'A-Za-z0-9!"#$%&'\''()*+,-./:;<=>?@[\]^_`{|}~' </dev/random | head -c 512 > "${keyfile}"
+
+    cryptsetup luksFormat "${target}" --key-file "${keyfile}" \
+        --cipher aes-xts-plain64 --key-size 512 --hash sha512 \
+        --iter-time 2000 --use-random
+
+    cryptsetup luksOpen "${target}" "${CRPYT_NAME}" --key-file "${keyfile}"
+elif [[ "$!" -eq 0 ]]; then
+    printf_verbose "Done\n"
+else
+    echo "Stopping, bad blocks found"
+fi
+
+if [[ -n "${MOUNTED_INITIALLY}" ]]; then
+    printf_verbose "Mounting ${target} to /mnt/data...\n"
+    mount "${target}" /mnt/data
+fi
+
+
+

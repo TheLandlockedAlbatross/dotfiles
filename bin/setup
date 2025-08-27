@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# The main setup file - entire setup hierarchy starts here
+
+set -e
+
+# Determine OS
+unameOut="$(uname -s)"
+case "${unameOut}" in
+    Linux*)
+        if grep -qi microsoft /proc/version; then
+            OS=WSL
+        else
+            OS=Linux
+        fi
+        source /etc/os-release
+        SETUP_DIR="$HOME/bin/$OS/$ID/$XDG_CURRENT_DESKTOP"
+        ;;
+    Darwin*)
+        OS=Darwin
+        ;;
+    CYGWIN*)
+        OS=Cygwin
+        export CHERE_INVOKING=1
+        ;;
+    MINGW*)
+        OS=Windows
+        ;;
+    *)
+        OS="UNKNOWN"
+        ;;
+esac
+
+
+source "$SETUP_DIR"/setup-home
+# "$SETUP_DIR"/setup-links
+# "$SETUP_DIR"/setup-util
+
+# # Set up system files (will need admin rights)
+# "$SETUP_DIR"/setup-util
+

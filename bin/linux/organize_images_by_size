@@ -1,0 +1,162 @@
+#!/bin/zsh
+
+print_usage() {
+    cat <<EOF
+Usage: $0 -s <src> -d <dest> [-v] [-r] [-h]
+
+Options:
+  -s <src>       Source directory containing images (required)
+  -d <dest>      Destination directory (required)
+  -v             Verbose output (optional)
+  -r             Delete source files after processing (optional, moves files)
+  -h             Print this help message and exit
+
+Example:
+  $0 -s ./images -d ./sorted -v
+EOF
+}
+
+verbose=0
+delete=0
+while getopts "s:d:vr" opt; do
+    case $opt in
+        s) src="$OPTARG" ;;
+        d) dest="$OPTARG" ;;
+        v) verbose=1 ;;
+        r) delete=1 ;;
+        h) print_usage ; exit 1 ;;
+        *) print_usage ; exit 1 ;;
+    esac
+done
+
+if [[ ! -d "$src" ]]; then
+    echo "Valid source directory must be provided."
+    exit 1
+fi
+
+if (( verbose )); then
+    echo "Source directory: $src"
+    echo "Destination directory: $dest"
+    echo "Verbose mode: ON"
+    echo "Delete mode: $([[ $delete -eq 1 ]] && echo ON || echo OFF)"
+fi
+
+# Check if ImageMagick 'identify' command is available
+if ! command -v identify &>/dev/null; then
+    echo "Error: 'identify' command from ImageMagick not found. Please install it."
+    exit 1
+fi
+
+# Find all image files (common extensions)
+# You can extend the pattern to other image types as needed
+image_files=($(find "$src" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" \)))
+
+if (( ${#image_files[@]} == 0 )); then
+    echo "No image files found in source directory."
+    exit 0
+fi
+
+if (( verbose )); then
+    echo "Found ${#image_files[@]} image files."
+fi
+
+# Make dest if needed now that images are detected
+if [[ -z "$dest" ]]; then
+    dest="organized_images_$(date +%s)"
+    mkdir -p "$dest"
+fi
+
+if [[ ! -d "$(dirname $dest)" ]]; then
+    echo "Valid destination directory must be provided."
+    exit 1
+fi
+
+# Create associative array for unique sizes
+typeset -A size_map
+
+# Populate size_map with unique sizes
+for img in "${image_files[@]}"; do
+    # Get image size WxH
+    size=$(identify -format "%wx%h" "$img" 2>/dev/null)
+    if [[ -n $size ]]; then
+        size_map[$size]=1
+    else
+        (( verbose )) && echo "Warning: Could not identify size for $img"
+    fi
+done
+
+unique_sizes=(${(k)size_map})
+
+if (( verbose )); then
+    echo "Unique image sizes found: ${#unique_sizes[@]}"
+    for s in "${unique_sizes[@]}"; do
+        echo " - $s"
+    done
+fi
+
+# Iterate over images and move/copy them
+if [[ -w "$(dirname $dest)" || -w "$dest" ]]; then
+    if (( verbose )); then
+        echo "Destination not writable, will request sudo"
+    fi
+    sudo mkdir -p "$dest"
+fi
+
+for img in "${image_files[@]}"; do
+    size=$(identify -format "%wx%h" "$img" 2>/dev/null)
+    if [[ -z $size ]]; then
+        (( verbose )) && echo "Skipping $img (unknown size)"
+        continue
+    fi
+
+    target_dir="$dest/$size"
+
+    # Use sudo if needed
+    if [[ -w "$dest" ]]; then
+        if [[ ! -d "$target_dir" ]]; then
+            (( verbose )) && echo "Creating directory: $target_dir"
+            mkdir -p "$target_dir"
+        fi
+
+        filename=$(basename "$img")
+        target_path="$target_dir/$filename"
+
+        if (( delete )); then
+            if (( verbose )); then
+                echo "Moving $img to $target_path"
+            fi
+            mv "$img" "$target_path"
+        else
+            if (( verbose )); then
+                echo "Copying $img to $target_path"
+            fi
+            cp "$img" "$target_path"
+        fi
+    else
+        if [[ ! -d "$target_dir" ]]; then
+            (( verbose )) && echo "Creating directory: $target_dir"
+            sudo mkdir -p "$target_dir"
+        fi
+
+        filename=$(basename "$img")
+        target_path="$target_dir/$filename"
+
+        if (( delete )); then
+            if (( verbose )); then
+                echo "Moving $img to $target_path"
+            fi
+            sudo mv "$img" "$target_path"
+        else
+            if (( verbose )); then
+                echo "Copying $img to $target_path"
+            fi
+            sudo cp "$img" "$target_path"
+        fi
+
+    fi
+done
+
+if (( verbose )); then
+    echo "Done processing images."
+fi
+

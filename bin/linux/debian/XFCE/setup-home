@@ -1,0 +1,34 @@
+#!/bin/sh
+
+set -e
+
+echo 0
+
+if [ ! -d "$HOME/.git" ]; then
+    # Stash default rcs
+    default_rcs=".bashrc .bash_logout .bash_profile .profile .vimrc .ssh/config"
+    OLD="$HOME/old_$(date +%s)"
+    mkdir -p "$OLD"
+    for f in $default_rcs; do
+        if [ -f "$f" ]; then
+            mv "$f" "$OLD"
+        fi
+    done
+
+    # Git setup
+    git init
+    git remove add origin "https://github.com/thelandlockedalbatross/dotfiles/"
+    git pull origin master --ff-only
+    git branch --set-upstream-to origin/master master
+    git-crypt unlock
+
+else
+    git pull origin master --ff-only
+fi
+
+alt_installs="eza safe-rm"
+extra_base_installs="cmake cron curl feh ffmpeg ffmpegthumbnailer ffmpegthumbs flameshot firmware-iwlwifi firmware-linux firmware-linux-nonfree firmware-misc-nonfree flatpak fzf gcc gnupg gparted gpg inxi jq lsof lshw make man-db meson moreutils neofetch nitrogen nodejs npm rename restic ripgrep rsync sxhkd tasksel tasksel-data tar tmuxinator traceroute tree unrar unzip valgrind vim vim-common vlc xclip xdotool xfonts-base xsct xsel xss-lock yazi zip zsh zsh-doc"
+
+i3_installs="i3 i3blocks picom sanoid sxhkd yad"
+
+xfce4_addons="xfce4-eyes-plugin xfce4-goodies xfce4-mount-plugin xfce4-netload-plugin xfce4-notifyd xfce4-panel xfce4-power-manager xfce4-sensors-plugin xfce4-terminal xfce4-wavelan-plugin xfce4-whiskermenu-plugin "
