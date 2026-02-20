@@ -1,0 +1,10 @@
+*
+!.gitignore
+!.gitattributes
+!LICENSE
+!.mozilla/
+!.mozilla/firefox/
+!.mozilla/firefox/encrypted_firefox_profiles.tar.zst
+!.mozilla/firefox/encrypted_firefox_config.tar.zst
+!.mozilla/firefox/pack_firefox.sh
+!.mozilla/firefox/unpack_firefox.sh
