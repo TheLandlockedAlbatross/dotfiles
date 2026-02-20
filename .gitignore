@@ -11,6 +11,7 @@
 !.config/omarchy/themes/ethereal-extended/**
 !.config/omarchy/hooks/
 !.config/omarchy/hooks/*
+.config/omarchy/hooks/*.sample
 !.config/waybar/
 !.config/waybar/config.jsonc
 !.config/waybar/style.css
