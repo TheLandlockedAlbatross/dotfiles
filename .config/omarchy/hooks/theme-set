@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Manage per-theme waybar workspace active icon
+# Themes with a 'waybar-no-active-icon' file show colored numbers instead of 󱓻
+
+THEME_DIR="$HOME/.config/omarchy/themes/$1"
+CONFIG="$HOME/.config/waybar/config.jsonc"
+
+strip_comments() {
+  grep -v '^\s*//' "$1"
+}
+
+has_active=$(strip_comments "$CONFIG" | jq -r '."hyprland/workspaces"."format-icons" | has("active")')
+wants_active=true
+[ -f "$THEME_DIR/waybar-no-active-icon" ] && wants_active=false
+
+# Only modify config and restart if state needs to change
+if [ "$wants_active" = true ] && [ "$has_active" = "false" ]; then
+  TEMP=$(mktemp)
+  strip_comments "$CONFIG" | jq '."hyprland/workspaces"."format-icons".active = "󱓻"' > "$TEMP"
+  mv "$TEMP" "$CONFIG"
+  omarchy-restart-waybar &
+elif [ "$wants_active" = false ] && [ "$has_active" = "true" ]; then
+  TEMP=$(mktemp)
+  strip_comments "$CONFIG" | jq '."hyprland/workspaces"."format-icons" |= del(.active)' > "$TEMP"
+  mv "$TEMP" "$CONFIG"
+  omarchy-restart-waybar &
+fi
