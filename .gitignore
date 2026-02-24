@@ -12,6 +12,10 @@
 !.config/omarchy/hooks/
 !.config/omarchy/hooks/*
 .config/omarchy/hooks/*.sample
+!.config/hypr/
+!.config/hypr/*.conf
+!.config/hypr/scripts/
+!.config/hypr/scripts/*
 !.config/waybar/
 !.config/waybar/config.jsonc
 !.config/waybar/style.css
