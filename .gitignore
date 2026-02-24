@@ -32,5 +32,6 @@
 !.mozilla/firefox/
 !.mozilla/firefox/encrypted_MEO_firefox_profiles.tar.zst
 !.mozilla/firefox/encrypted_MEO_firefox_config.tar.zst
-!.mozilla/firefox/encrypted_MEO_pack_firefox.sh
-!.mozilla/firefox/encrypted_MEO_unpack_firefox.sh
+!.mozilla/firefox/pack_firefox.sh
+!.mozilla/firefox/unpack_firefox.sh
+!.mozilla/firefox/encrypted_MEO_my_profiles.txt

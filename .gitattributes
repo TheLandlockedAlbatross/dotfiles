@@ -1,1 +1,1 @@
-.mozilla/firefox/** filter=git-crypt diff=git-crypt
+.mozilla/firefox/encrypted_MEO_* filter=git-crypt diff=git-crypt
