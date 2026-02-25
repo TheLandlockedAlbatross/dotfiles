@@ -1,43 +1,41 @@
 #!/bin/bash
 # Toggle a Hyprland monitor on/off by name.
-# Usage: monitor-toggle.sh <monitor-name>
+# Usage: monitor-toggle.sh [monitor-name]
+# All monitors are discovered dynamically via wlr-randr (no hardcoded values).
 # Safety: refuses to disable the last active monitor.
 
 OVERRIDE_FLAG="/tmp/hypr-monitor-manual"
-
-# Monitor configs — add entries here to match monitors.conf
-declare -A MONITOR_CONFIGS=(
-    ["eDP-1"]="eDP-1, preferred, auto, 2"
-    ["HDMI-A-1"]="HDMI-A-1, 3840x2160@120, 0x0, 2.4"
-)
+MONITORS_CONF="$HOME/.config/hypr/monitors.conf"
 
 MONITOR="$1"
 if [[ -z "$MONITOR" ]]; then
-    # No argument — show a rofi dropdown of all known monitors with status
-    MONITORS_JSON=$(hyprctl monitors all -j)
+    # No argument — discover all connected monitors and show menu with status
     menu=""
-    for name in "${!MONITOR_CONFIGS[@]}"; do
-        is_on=$(echo "$MONITORS_JSON" | jq -r ".[] | select(.name == \"$name\" and .disabled == false) | .name")
-        if [[ -n "$is_on" ]]; then
+    while IFS=$'\t' read -r name enabled; do
+        if [[ "$enabled" == "true" ]]; then
             menu+="$name (on)"$'\n'
         else
             menu+="$name (off)"$'\n'
         fi
-    done
+    done < <(wlr-randr --json | jq -r '.[] | [.name, (.enabled | tostring)] | @tsv')
+
+    if [[ -z "$menu" ]]; then
+        swayosd-client --custom-icon dialog-warning --custom-message "No monitors found"
+        exit 1
+    fi
+
     choice=$(echo -n "$menu" | sed '/^$/d' | walker -d -p "Toggle monitor") || exit 0
     MONITOR="${choice%% (*}"
 fi
 
-CONFIG="${MONITOR_CONFIGS[$MONITOR]}"
-if [[ -z "$CONFIG" ]]; then
+# Verify the monitor exists
+if ! wlr-randr --json | jq -e ".[] | select(.name == \"$MONITOR\")" > /dev/null 2>&1; then
     echo "Unknown monitor: $MONITOR" >&2
     exit 1
 fi
 
-# Count active (non-disabled) monitors
+# Count active monitors and check if target is active
 active_count=$(hyprctl monitors -j | jq '[.[] | select(.disabled == false)] | length')
-
-# Check if this monitor is currently active
 is_active=$(hyprctl monitors -j | jq -r ".[] | select(.name == \"$MONITOR\" and .disabled == false) | .name")
 
 if [[ -n "$is_active" ]]; then
@@ -47,13 +45,26 @@ if [[ -n "$is_active" ]]; then
         exit 1
     fi
     hyprctl keyword monitor "$MONITOR, disable"
+    # Persist to monitors.conf
+    python3 -c "
+import os, sys
+name, conf = sys.argv[1], os.path.expanduser('~/.config/hypr/monitors.conf')
+lines = open(conf).readlines()
+out = [f'monitor = {name}, disable\n' if l.strip().startswith('monitor') and '= ' + name in l else l for l in lines]
+if not any('= ' + name in l for l in lines if l.strip().startswith('monitor')):
+    out.append(f'monitor = {name}, disable\n')
+open(conf, 'w').writelines(out)
+" "$MONITOR"
     touch "$OVERRIDE_FLAG"
     swayosd-client --custom-icon video-display --custom-message "$MONITOR disabled"
 else
     # Monitor is disabled or not listed — launch picker for placement
+    # Picker outputs TWO config lines (current + new) and writes monitors.conf
     PICKER="$(dirname "$0")/monitor-picker.py"
-    if PICKED_CONFIG=$(python3 "$PICKER" "$MONITOR" 2>/dev/null); then
-        hyprctl keyword monitor "$PICKED_CONFIG"
+    if PICKED_CONFIGS=$(python3 "$PICKER" "$MONITOR" 2>/dev/null); then
+        while IFS= read -r config; do
+            [[ -n "$config" ]] && hyprctl keyword monitor "$config"
+        done <<< "$PICKED_CONFIGS"
         touch "$OVERRIDE_FLAG"
         swayosd-client --custom-icon video-display --custom-message "$MONITOR enabled"
     else
