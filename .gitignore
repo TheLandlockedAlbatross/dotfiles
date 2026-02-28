@@ -11,6 +11,8 @@
 !.config/omarchy/themes/ethereal-extended/**
 !.config/omarchy/hooks/
 !.config/omarchy/hooks/*
+!.config/omarchy/extensions/
+!.config/omarchy/extensions/*
 .config/omarchy/hooks/*.sample
 !.config/hypr/
 !.config/hypr/*.conf
