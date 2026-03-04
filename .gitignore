@@ -28,6 +28,8 @@
 !.config/waybar/poll-rate-menu.sh
 !.config/waybar/poll-rate.sh
 !.config/waybar/power-draw.sh
+!.config/waybar/network-vpn.sh
+!.config/waybar/network-vpn-incognito.sh
 !.config/waybar/screen-brightness.sh
 !.config/waybar/screen-temperature.sh
 !.mozilla/

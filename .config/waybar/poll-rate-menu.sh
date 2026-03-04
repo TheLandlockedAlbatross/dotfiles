@@ -2,7 +2,7 @@
 STATE_FILE="/tmp/waybar-poll-rate"
 STEPS=("0.1" "0.25" "0.5" "1" "2" "3" "4" "5" "6" "7" "8" "9" "10" "30" "60")
 
-current_idx=$(cat "$STATE_FILE" 2>/dev/null || echo 6)
+current_idx=$(cat "$STATE_FILE" 2>/dev/null || echo 3)
 current_val=${STEPS[$current_idx]}
 
 # Build menu with current value marked

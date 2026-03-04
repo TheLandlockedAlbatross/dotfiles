@@ -18,7 +18,7 @@
     "custom/poll-rate",
     "group/tray-expander",
     "bluetooth",
-    "network",
+    "custom/network",
     "pulseaudio",
     "group/screen-display",
     "battery",
@@ -95,24 +95,15 @@
     "tooltip": false,
     "on-click-right": "omarchy-launch-floating-terminal-with-presentation omarchy-tz-select"
   },
-  "network": {
-    "format-icons": [
-      "󰤯",
-      "󰤟",
-      "󰤢",
-      "󰤥",
-      "󰤨"
-    ],
-    "format": "{icon}",
-    "format-wifi": "{icon}",
-    "format-ethernet": "󰀂",
-    "format-disconnected": "󰤮",
-    "tooltip-format-wifi": "{essid} ({frequency} GHz)\n⇣{bandwidthDownBytes}  ⇡{bandwidthUpBytes}",
-    "tooltip-format-ethernet": "⇣{bandwidthDownBytes}  ⇡{bandwidthUpBytes}",
-    "tooltip-format-disconnected": "Disconnected",
+  "custom/network": {
+    "exec": "~/.config/waybar/network-vpn.sh",
+    "return-type": "json",
     "interval": 1,
-    "spacing": 1,
-    "on-click": "omarchy-launch-wifi"
+    "on-click": "omarchy-launch-wifi",
+    "on-click-middle": "~/.config/waybar/network-vpn-incognito.sh",
+    "on-click-right": "bash -c '[[ -f /tmp/waybar-incognito ]] && exit 0; S=$(mullvad status); if echo \"$S\" | head -1 | grep -q Connected; then mullvad disconnect; else ~/.config/hypr/scripts/mullvad-cycle.sh next; fi'",
+    "on-scroll-up": "bash -c '[[ -f /tmp/waybar-incognito ]] && exit 0; ~/.config/hypr/scripts/mullvad-cycle.sh next'",
+    "on-scroll-down": "bash -c '[[ -f /tmp/waybar-incognito ]] && exit 0; ~/.config/hypr/scripts/mullvad-cycle.sh prev'"
   },
   "battery": {
     "format": "{icon} {capacity}%",

@@ -68,7 +68,7 @@
   margin-right: 17px;
 }
 
-#network {
+#custom-network {
   margin-right: 13px;
 }
 
@@ -78,6 +78,13 @@
 
 tooltip {
   padding: 2px;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+tooltip > * {
+  margin: 0;
+  padding: 0;
 }
 
 #custom-update {

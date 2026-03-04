@@ -38,6 +38,13 @@ show_vpn_menu() {
     options="󰖪  Disconnected"
   fi
 
+  # Incognito toggle
+  if [[ -f /tmp/waybar-incognito ]]; then
+    options="$options\n󰗹  Incognito: ON"
+  else
+    options="$options\n󰗹  Incognito: OFF"
+  fi
+
   # Add all countries (skip current if connected)
   while IFS= read -r line; do
     local code name
@@ -52,6 +59,7 @@ show_vpn_menu() {
 
   case "$selected" in
   *Disconnected*|""|CNCLD) back_to show_setup_menu ;;
+  *Incognito*) ~/.config/waybar/network-vpn-incognito.sh; back_to show_vpn_menu ;;
   *"$country_name ($country_code)"*) back_to show_setup_menu ;;
   *)
     local sel_code

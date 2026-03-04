@@ -5,7 +5,7 @@ watts_raw=$(awk '{printf "%.0f", $1 / 1000000}' /sys/class/power_supply/BAT0/pow
 case "$profile" in
   performance) icon="󰈸" ;;
   balanced)    icon="󰗑" ;;
-  low-power)   icon="󰌪" ;;
+  quiet)       icon="󰌪" ;;
   *)           icon="󱐋" ;;
 esac
 
