@@ -234,7 +234,7 @@ draw_box() {
   local tlen=${#title}
   printf '%s┌─ %s%s%s %s' "$bc" "${B}${tc}" "$title" "${RST}${bc}" "$bc"
   hline '─' $((w - tlen - 5))
-  printf '┐%s' "$RST"
+  printf '┐%s\e[K' "$RST"
 
   local content_start=$((y + 1))
 
@@ -244,7 +244,7 @@ draw_box() {
     local vl; vl=$(vislen "$col_hdr")
     local pad=$((inner_w - 2 - vl))
     (( pad < 0 )) && pad=0
-    printf '%s│%s  %b%*s%s│%s' "$bc" "$RST" "$col_hdr" "$pad" "" "$bc" "$RST"
+    printf '%s│%s  %b%*s%s│%s\e[K' "$bc" "$RST" "$col_hdr" "$pad" "" "$bc" "$RST"
     ((content_start++))
   fi
 
@@ -254,7 +254,7 @@ draw_box() {
 
   for ((row=0; row<inner_h; row++)); do
     m $((content_start + row)) 1
-    printf '%s│%s' "$bc" "$RST"
+    printf '%s│%s' "$bc" "$RST"  # left border
 
     local idx=$((scroll + row))
     if (( idx < count )); then
@@ -273,14 +273,14 @@ draw_box() {
       printf '%*s' "$inner_w" ''
     fi
 
-    printf '%s│%s' "$bc" "$RST"
+    printf '%s│%s\e[K' "$bc" "$RST"  # right border + clear EOL
   done
 
   # Bottom border
   m $((y + h - 1)) 1
   printf '%s└' "$bc"
   hline '─' $((w - 2))
-  printf '┘%s' "$RST"
+  printf '┘%s\e[K' "$RST"
 }
 
 draw_screen() {
@@ -288,7 +288,7 @@ draw_screen() {
   cols=$(tput cols)
   rows=$(tput lines)
 
-  printf '\e[2J'  # clear
+  printf '\e[H'  # home cursor (no clear — overwrite in place)
 
   local box_w=$((cols))
   local pool_h=$(( (rows - 2) * 3 / 5 ))
@@ -304,7 +304,7 @@ draw_screen() {
   if [[ -n "$STATUS_MSG" ]]; then
     printf '%b  ' "$STATUS_MSG"
   fi
-  printf '%s↑↓%s navigate  %s→%s/%sEnter%s select  %sTab%s switch  %s←%s/%sEsc%s back  %sq%s quit' \
+  printf '%s↑↓%s navigate  %s→%s/%sEnter%s select  %sTab%s switch  %s←%s/%sEsc%s back  %sq%s quit\e[K\e[J' \
     "$CYN" "$RST" "$CYN" "$RST" "$CYN" "$RST" \
     "$CYN" "$RST" "$CYN" "$RST" "$CYN" "$RST" "$CYN" "$RST"
 }
