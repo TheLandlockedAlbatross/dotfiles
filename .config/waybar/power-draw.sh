@@ -43,6 +43,6 @@ case "$status" in
     ;;
   *)
     # Full / Not charging — no battery activity
-    printf '{"text": "%s", "tooltip": "%s"}\n' "$icon" "$tooltip"
+    printf '{"text": "%s ", "tooltip": "%s"}\n' "$icon" "$tooltip"
     ;;
 esac

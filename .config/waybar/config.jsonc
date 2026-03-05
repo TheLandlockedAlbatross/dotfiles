@@ -20,7 +20,7 @@
     "bluetooth",
     "custom/network",
     "pulseaudio",
-    "group/screen-display",
+    "custom/screen-temperature", "custom/screen-brightness",
     "battery",
     "custom/power-draw"
   ],
@@ -68,13 +68,13 @@
     "return-type": "json",
     "align": 0,
     "interval": 1,
-    "on-scroll-up": "bash -c 'hyprctl hyprsunset temperature $(($(hyprctl hyprsunset temperature) + 50))'",
-    "on-scroll-down": "bash -c 'hyprctl hyprsunset temperature $(($(hyprctl hyprsunset temperature) - 50))'",
-    "on-scroll-right": "bash -c 'hyprctl hyprsunset temperature $(($(hyprctl hyprsunset temperature) + 50))'",
-    "on-scroll-left": "bash -c 'hyprctl hyprsunset temperature $(($(hyprctl hyprsunset temperature) - 50))'",
+    "on-scroll-up": "~/.config/waybar/cycle-temperature.sh 50",
+    "on-scroll-down": "~/.config/waybar/cycle-temperature.sh -50",
+    "on-scroll-right": "~/.config/waybar/cycle-temperature.sh 50",
+    "on-scroll-left": "~/.config/waybar/cycle-temperature.sh -50",
     "on-click": "~/.config/waybar/cycle-temperature.sh -500",
     "on-click-right": "~/.config/waybar/cycle-temperature.sh 500",
-    "on-click-middle": "hyprctl hyprsunset temperature 5000"
+    "on-click-middle": "~/.config/waybar/screen-display-toggle.sh"
   },
   "custom/screen-brightness": {
     "exec": "~/.config/waybar/screen-brightness.sh",
@@ -87,7 +87,7 @@
     "on-scroll-left": "~/.config/hypr/scripts/swayosd-focused.sh --brightness -1",
     "on-click": "~/.config/waybar/cycle-brightness.sh -10",
     "on-click-right": "~/.config/waybar/cycle-brightness.sh 10",
-    "on-click-middle": "brightnessctl set 50%"
+    "on-click-middle": "~/.config/waybar/screen-display-toggle.sh"
   },
   "custom/clock": {
     "exec": "~/.config/waybar/clock.sh",

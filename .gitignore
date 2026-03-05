@@ -32,6 +32,7 @@
 !.config/waybar/network-vpn-incognito.sh
 !.config/waybar/screen-brightness.sh
 !.config/waybar/screen-temperature.sh
+!.config/waybar/screen-display-toggle.sh
 !.mozilla/
 !.mozilla/firefox/
 !.mozilla/firefox/encrypted_MEO_firefox_profiles.tar.zst

@@ -54,9 +54,9 @@
 
 #custom-screen-temperature,
 #custom-screen-brightness {
-  font-size: 7px;
-  padding: 0;
-  margin: 0;
+  font-size: 12px;
+  min-width: 12px;
+  margin: 0 7.5px;
 }
 
 
