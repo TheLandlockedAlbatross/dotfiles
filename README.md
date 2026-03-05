@@ -41,8 +41,8 @@ Replaces several default modules with custom widgets:
 - **Clock** — shows day-of-year, weeks remaining, week number
 - **Network** — real-time bandwidth, Mullvad VPN overlay (green=connected, red=disconnected), incognito mode toggle
 - **Power draw** — wattage with color scaling, CPU frequency in tooltip
-- **Screen temperature** — color-coded Kelvin display, scroll to adjust
-- **Screen brightness** — scroll to adjust, middle-click reset
+- **Screen temperature** — color-coded Kelvin display, scroll ±50K, click ±500K (snaps to nearest 500), swayosd notification
+- **Screen brightness** — scroll ±1%, click ±10% (snaps to nearest 10), middle-click toggles compact/expanded layout
 - **Poll rate** — configurable Waybar refresh interval (0.1s–60s)
 
 ### Omarchy Extensions
