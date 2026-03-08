@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bitwarden CLI vault backup — encrypted JSON export
 
-BACKUP_DIR="$HOME/.local/share/bitwarden-backup"
+BACKUP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bitwarden-backup"
 
 gum style --bold --border rounded --padding "0 2" --border-foreground 4 \
   "Bitwarden CLI Vault Backup"
@@ -26,7 +26,8 @@ if [[ -z "$password" ]]; then
   exit 1
 fi
 
-session=$(bw unlock "$password" --raw 2>/dev/null)
+export BW_MASTER_PW="$password"
+session=$(bw unlock --passwordenv BW_MASTER_PW --raw 2>/dev/null)
 if [[ -z "$session" ]]; then
   gum style --foreground 1 "Failed to unlock vault. Wrong password?"
   gum confirm "Close?" --default=yes --affirmative="OK" --negative="" || true
@@ -43,11 +44,14 @@ mkdir -p "$BACKUP_DIR/$email"
 timestamp="$(date +%Y%m%d)_$(date +%s)"
 outfile="$BACKUP_DIR/$email/bw-export_${timestamp}.json"
 
+# Note: bw export only accepts password as CLI arg (visible in ps briefly).
+# This is a known bw CLI limitation — no --passwordenv/--passwordfile support.
 if bw export --format encrypted_json --password "$password" --output "$outfile" &>/dev/null; then
   gum style --foreground 2 --bold "Backup saved:" "$outfile"
 else
   gum style --foreground 1 "Export failed."
 fi
 
+unset BW_MASTER_PW
 bw lock &>/dev/null
 gum confirm "Close?" --default=yes --affirmative="OK" --negative="" || true
