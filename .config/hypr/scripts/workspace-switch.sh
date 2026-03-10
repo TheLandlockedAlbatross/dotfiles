@@ -1,7 +1,25 @@
 #!/bin/bash
 TARGET=$1
 PREV_FILE=/tmp/hypr-workspace-prev
+SPLIT_STATE=/tmp/hypr-workspace-split
 CURRENT=$(hyprctl activeworkspace -j | jq .id)
+
+# If workspace split is active, determine the correct monitor
+SPLIT_DEST=""
+if [[ -f $SPLIT_STATE ]]; then
+  mode=$(cat "$SPLIT_STATE")
+  monitors=$(hyprctl monitors -j | jq -r '[.[] | select(.disabled == false)] | sort_by(.id) | .[].name')
+  mon_a=$(echo "$monitors" | head -1)
+  mon_b=$(echo "$monitors" | sed -n '2p')
+
+  if [[ -n $mon_b ]]; then
+    if (( TARGET % 2 == 1 )); then
+      [[ $mode == "normal" ]] && SPLIT_DEST="$mon_a" || SPLIT_DEST="$mon_b"
+    else
+      [[ $mode == "normal" ]] && SPLIT_DEST="$mon_b" || SPLIT_DEST="$mon_a"
+    fi
+  fi
+fi
 
 if [[ "$CURRENT" == "$TARGET" ]]; then
     # Toggle back
@@ -20,4 +38,10 @@ else
         echo "$CURRENT" > "$PREV_FILE"
     fi
     hyprctl dispatch workspace "$TARGET"
+fi
+
+# Enforce split: move workspace to correct monitor after switching
+if [[ -n $SPLIT_DEST ]]; then
+  hyprctl dispatch moveworkspacetomonitor "$TARGET $SPLIT_DEST" >/dev/null 2>&1
+  hyprctl dispatch focusmonitor "$SPLIT_DEST" >/dev/null 2>&1
 fi
