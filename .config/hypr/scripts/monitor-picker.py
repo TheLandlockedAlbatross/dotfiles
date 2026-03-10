@@ -425,13 +425,13 @@ class MonitorPicker(Gtk.Window):
 
         # s / S — adjust scale of the new monitor by ±0.1
         if key == "s":
-            self.new_scale_tenths = max(5, self.new_scale_tenths - 1)
+            self.new_scale_tenths = min(50, self.new_scale_tenths + 1)
             self._sync_scale()
             self.darea.queue_draw()
             self._update_cmd()
             return True
         if key == "S":
-            self.new_scale_tenths = min(50, self.new_scale_tenths + 1)
+            self.new_scale_tenths = max(5, self.new_scale_tenths - 1)
             self._sync_scale()
             self.darea.queue_draw()
             self._update_cmd()
