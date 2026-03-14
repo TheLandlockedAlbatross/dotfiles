@@ -39,7 +39,7 @@
 }
 
 #cpu,
-#battery,
+#custom-battery,
 #pulseaudio,
 #custom-omarchy,
 
@@ -47,6 +47,7 @@
   min-width: 12px;
   margin: 0 7.5px;
 }
+
 
 #screen-display {
   margin: 0 7.5px;

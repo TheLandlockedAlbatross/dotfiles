@@ -22,6 +22,17 @@ cpu_usage=$(awk '/^cpu[0-9]/ {
 
 tooltip="${cpu_ghz}GHz\\n${cpu_usage}"
 
+# System power draw (PPT) from amdgpu hwmon
+get_system_watts() {
+  for d in /sys/class/hwmon/hwmon*; do
+    if [[ $(cat "$d/name" 2>/dev/null) == "amdgpu" ]]; then
+      awk '{printf "%.0f", $1 / 1000000}' "$d/power1_input" 2>/dev/null
+      return
+    fi
+  done
+  echo "0"
+}
+
 case "$status" in
   Discharging)
     # 0-7W = white, then scale to #ff8888 at 20W
@@ -42,7 +53,21 @@ case "$status" in
     printf '{"text": "%s <span color='\''#88dd88'\''>+%sW</span>", "tooltip": "%s"}\n' "$icon" "$watts_raw" "$tooltip"
     ;;
   *)
-    # Full / Not charging — no battery activity
-    printf '{"text": "%s ", "tooltip": "%s"}\n' "$icon" "$tooltip"
+    # Not charging / equilibrium — show system draw from AC
+    # Grey below 30W, log-scale towards red above 30W
+    sys_watts=$(get_system_watts)
+    ac_color=$(awk -v w="$sys_watts" 'BEGIN {
+      if (w <= 30) {
+        printf "#888888"
+      } else {
+        d = w - 30
+        t = log(1 + d) / log(71)
+        r = 136 + t * (255 - 136)
+        g = 136 - t * (136 - 88)
+        b = 136 - t * (136 - 88)
+        printf "#%02x%02x%02x", r, g, b
+      }
+    }')
+    printf '{"text": "%s <span color='\''%s'\''>~%sW</span>", "tooltip": "System draw (AC)\\n%s"}\n' "$icon" "$ac_color" "$sys_watts" "$tooltip"
     ;;
 esac

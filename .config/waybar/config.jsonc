@@ -22,7 +22,7 @@
     "pulseaudio",
     "custom/screen-temperature",
     "custom/screen-brightness",
-    "battery",
+    "custom/battery",
     "custom/power-draw"
   ],
   "hyprland/workspaces": {
@@ -82,10 +82,11 @@
     "return-type": "json",
     "align": 0,
     "interval": 1,
-    "on-scroll-up": "~/.config/hypr/scripts/swayosd-focused.sh --brightness +1",
-    "on-scroll-down": "~/.config/hypr/scripts/swayosd-focused.sh --brightness -1",
-    "on-scroll-right": "~/.config/hypr/scripts/swayosd-focused.sh --brightness +1",
-    "on-scroll-left": "~/.config/hypr/scripts/swayosd-focused.sh --brightness -1",
+    "smooth-scrolling-threshold": 1,
+    "on-scroll-up": "~/.config/hypr/scripts/swayosd-focused.sh --min-brightness 0 --brightness +1",
+    "on-scroll-down": "~/.config/hypr/scripts/swayosd-focused.sh --min-brightness 0 --brightness -1",
+    "on-scroll-right": "~/.config/hypr/scripts/swayosd-focused.sh --min-brightness 0 --brightness +1",
+    "on-scroll-left": "~/.config/hypr/scripts/swayosd-focused.sh --min-brightness 0 --brightness -1",
     "on-click": "~/.config/waybar/cycle-brightness.sh -10",
     "on-click-right": "~/.config/waybar/cycle-brightness.sh 10",
     "on-click-middle": "~/.config/waybar/screen-display-toggle.sh"
@@ -106,47 +107,11 @@
     "on-scroll-up": "bash -c '[[ -f /tmp/waybar-incognito ]] && exit 0; ~/.config/hypr/scripts/mullvad-cycle.sh next'",
     "on-scroll-down": "bash -c '[[ -f /tmp/waybar-incognito ]] && exit 0; ~/.config/hypr/scripts/mullvad-cycle.sh prev'"
   },
-  "battery": {
-    "format": "{icon} {capacity}%",
-    "format-discharging": "{icon} {capacity}%",
-    "format-charging": "{icon} {capacity}%",
-    "format-plugged": "",
-    "format-icons": {
-      "charging": [
-        "󰢜",
-        "󰂆",
-        "󰂇",
-        "󰂈",
-        "󰢝",
-        "󰂉",
-        "󰢞",
-        "󰂊",
-        "󰂋",
-        "󰂅"
-      ],
-      "default": [
-        "󰁺",
-        "󰁻",
-        "󰁼",
-        "󰁽",
-        "󰁾",
-        "󰁿",
-        "󰂀",
-        "󰂁",
-        "󰂂",
-        "󰁹"
-      ]
-    },
-    "format-full": "󰂅",
-    "format-time": "{H}:{M}",
-    "tooltip-format-discharging": "{time}",
-    "tooltip-format-charging": "{time}",
+  "custom/battery": {
+    "exec": "~/.config/waybar/battery-status.sh",
+    "return-type": "json",
     "interval": 1,
-    "on-click": "~/.config/waybar/battery-info.sh",
-    "states": {
-      "warning": 20,
-      "critical": 10
-    }
+    "on-click": "~/.config/waybar/battery-info.sh"
   },
   "custom/power-draw": {
     "format": "{}",
@@ -175,7 +140,12 @@
     "on-click": "omarchy-launch-audio",
     "on-click-right": "pamixer -t",
     "tooltip-format": "Playing at {volume}%",
-    "scroll-step": 5,
+    "scroll-step": 1,
+    "smooth-scrolling-threshold": 1,
+    "on-scroll-up": "~/.config/hypr/scripts/swayosd-focused.sh --output-volume +1",
+    "on-scroll-down": "~/.config/hypr/scripts/swayosd-focused.sh --output-volume -1",
+    "on-scroll-right": "~/.config/hypr/scripts/swayosd-focused.sh --output-volume +1",
+    "on-scroll-left": "~/.config/hypr/scripts/swayosd-focused.sh --output-volume -1",
     "format-muted": "",
     "format-icons": {
       "headphone": "",
