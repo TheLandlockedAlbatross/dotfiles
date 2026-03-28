@@ -28,12 +28,10 @@ fi
 
 hyprctl hyprsunset temperature "$next"
 
-if (( next < 3600 )); then
-  icon="temperature-warm"
-elif (( next <= 6000 )); then
-  icon="temperature-normal"
-else
+if (( next >= 5000 )); then
   icon="temperature-cold"
+else
+  icon="temperature-warm"
 fi
 
 progress=$(awk "BEGIN { v = ($next - 1000) / 5500; v = v < 0 ? 0 : v > 1 ? 1 : v; printf \"%.2f\", v }")

@@ -15,8 +15,8 @@
     "custom/screenrecording-indicator"
   ],
   "modules-right": [
-    "custom/poll-rate",
     "group/tray-expander",
+    "custom/poll-rate",
     "bluetooth",
     "custom/network",
     "pulseaudio",
@@ -209,6 +209,6 @@
   },
   "tray": {
     "icon-size": 12,
-    "spacing": 17
+    "spacing": 15
   }
 }

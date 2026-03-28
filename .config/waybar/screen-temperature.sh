@@ -26,5 +26,6 @@ else
     b = (b < 100) ? 100 : b;
     printf "#%02x%02x%02x", r, g, b;
   }')
-  echo "{\"text\": \"<span color='${COLOR}'>󰔏 ${T}K</span>\", \"tooltip\": \"Screen Temperature: ${T}K\"}"
+  ICON=$( (( T >= 5000 )) && echo "󱃃" || echo "󰔏" )
+  echo "{\"text\": \"<span color='${COLOR}'>${ICON} ${T}K</span>\", \"tooltip\": \"Screen Temperature: ${T}K\"}"
 fi
