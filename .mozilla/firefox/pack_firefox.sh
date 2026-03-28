@@ -3,8 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Extract AES-256 key from git-crypt key file (git-crypt can't coexist with LFS)
+GIT_CRYPT_KEYFILE="$(git rev-parse --git-dir)/git-crypt/keys/default"
+if [[ ! -r "$GIT_CRYPT_KEYFILE" ]]; then
+    echo "Error: git-crypt key not found at $GIT_CRYPT_KEYFILE"
+    echo "Is git-crypt unlocked in this repo?"
+    exit 1
+fi
+AES_KEY="$(od -A n -t x1 -j 40 -N 32 "$GIT_CRYPT_KEYFILE" | tr -d ' \n')"
+
 # Check dependencies
-for cmd in tar zstd; do
+for cmd in tar zstd openssl; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: '$cmd' is not installed."
         echo "Install it with your package manager, e.g.:"
@@ -18,11 +27,13 @@ done
 # --- Parse arguments ---
 PROFILES=()
 PROFILES_FILE=""
+MINIMAL=false
 
 usage() {
-    echo "Usage: $(basename "$0") [--profile <name>]... [--file <path>]"
+    echo "Usage: $(basename "$0") [--profile <name>]... [--file <path>] [--minimal]"
     echo "  --profile <name>   Add a profile (repeatable)"
     echo "  --file <path>      Read profiles from file (one per line)"
+    echo "  --minimal          Pack only settings (no extensions, history, or bookmarks)"
     echo "  If neither given, reads from encrypted_MEO_my_profiles.txt in script dir"
     exit 1
 }
@@ -38,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             [[ $# -lt 2 ]] && usage
             PROFILES_FILE="$2"
             shift 2
+            ;;
+        --minimal)
+            MINIMAL=true
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -69,18 +84,41 @@ if [[ ${#PROFILES[@]} -eq 0 ]]; then
     usage
 fi
 
+# Settings and about:config
 PROFILE_FILES=(
     "prefs.js"
-    "extensions.json"
-    "addons.json"
-    "places.sqlite"
-    "favicons.sqlite"
-    "search.json.mozlz4"
+    "xulstore.json"
     "handlers.json"
+    "search.json.mozlz4"
+    "containers.json"
     "permissions.sqlite"
     "content-prefs.sqlite"
+)
+
+# Extension metadata and data
+PROFILE_FILES_EXT=(
+    "extensions.json"
+    "addons.json"
+    "extension-settings.json"
+    "extension-preferences.json"
+)
+
+# Directories to include (full pack only)
+PROFILE_DIRS=(
+    "extensions"
+    "browser-extension-data"
+    "extension-store"
+    "extension-store-menus"
+    "extension-store-userscripts"
+    "extension-dnr"
+    "storage"
+)
+
+# History, bookmarks, extension sync storage
+PROFILE_FILES_DATA=(
+    "places.sqlite"
+    "favicons.sqlite"
     "storage-sync-v2.sqlite"
-    "containers.json"
 )
 
 CONFIG_ITEMS=(
@@ -97,16 +135,36 @@ for profile in "${PROFILES[@]}"; do
     fi
 done
 
+# --- Build file list ---
+ALL_FILES=("${PROFILE_FILES[@]}" "${PROFILE_FILES_EXT[@]}")
+ALL_DIRS=()
+if [[ "$MINIMAL" == false ]]; then
+    ALL_FILES+=("${PROFILE_FILES_DATA[@]}")
+    ALL_DIRS=("${PROFILE_DIRS[@]}")
+fi
+
 # --- Pack profiles ---
-echo "Packing profiles..."
+if [[ "$MINIMAL" == true ]]; then
+    echo "Packing profiles (minimal — settings only)..."
+else
+    echo "Packing profiles (full — extensions, history, bookmarks)..."
+fi
 tar_args=()
 for profile in "${PROFILES[@]}"; do
-    for f in "${PROFILE_FILES[@]}"; do
+    for f in "${ALL_FILES[@]}"; do
         filepath="$profile/$f"
         if [[ -e "$SCRIPT_DIR/$filepath" ]]; then
             tar_args+=("$filepath")
         else
             echo "  Skipping (not found): $filepath"
+        fi
+    done
+    for d in "${ALL_DIRS[@]}"; do
+        dirpath="$profile/$d"
+        if [[ -d "$SCRIPT_DIR/$dirpath" ]]; then
+            tar_args+=("$dirpath")
+        else
+            echo "  Skipping (not found): $dirpath"
         fi
     done
 done
@@ -116,7 +174,9 @@ if [[ ${#tar_args[@]} -eq 0 ]]; then
     exit 1
 fi
 
-tar -cf - -C "$SCRIPT_DIR" "${tar_args[@]}" | zstd -10 -f -o "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst"
+tar -cf - -C "$SCRIPT_DIR" "${tar_args[@]}" \
+    | zstd -10 \
+    | openssl enc -aes-256-cbc -pbkdf2 -pass "pass:$AES_KEY" -out "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst"
 echo "Created encrypted_MEO_firefox_profiles.tar.zst"
 
 # --- Pack config ---

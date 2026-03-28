@@ -4,8 +4,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
+# Extract AES-256 key from git-crypt key file
+GIT_CRYPT_KEYFILE="$(git rev-parse --git-dir)/git-crypt/keys/default"
+if [[ ! -r "$GIT_CRYPT_KEYFILE" ]]; then
+    echo "Error: git-crypt key not found at $GIT_CRYPT_KEYFILE"
+    echo "Is git-crypt unlocked in this repo?"
+    exit 1
+fi
+AES_KEY="$(od -A n -t x1 -j 40 -N 32 "$GIT_CRYPT_KEYFILE" | tr -d ' \n')"
+
 # Check dependencies
-for cmd in tar zstd; do
+for cmd in tar zstd openssl; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Error: '$cmd' is not installed."
         echo "Install it with your package manager, e.g.:"
@@ -95,7 +104,9 @@ for profile in "${PROFILES[@]}"; do
 done
 
 echo "Unpacking profiles..."
-zstd -d "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst" --stdout | tar -xf - -C "$SCRIPT_DIR"
+openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$AES_KEY" -in "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst" \
+    | zstd -d \
+    | tar -xf - -C "$SCRIPT_DIR"
 echo "Profiles unpacked."
 
 # --- Backup and unpack config ---
