@@ -16,6 +16,8 @@
 .config/omarchy/hooks/*.sample
 !.config/hypr/
 !.config/hypr/*.conf
+!.config/xdg-desktop-portal/
+!.config/xdg-desktop-portal/hyprland-portals.conf
 !.config/hypr/scripts/
 !.config/hypr/scripts/*
 !.config/waybar/
