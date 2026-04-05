@@ -29,14 +29,14 @@ if [[ -z "$MONITOR" ]]; then
 fi
 
 # Verify the monitor exists
-if ! wlr-randr --json | jq -e ".[] | select(.name == \"$MONITOR\")" > /dev/null 2>&1; then
+if ! wlr-randr --json | jq -e --arg mon "$MONITOR" '.[] | select(.name == $mon)' > /dev/null 2>&1; then
     echo "Unknown monitor: $MONITOR" >&2
     exit 1
 fi
 
 # Count active monitors and check if target is active
 active_count=$(hyprctl monitors -j | jq '[.[] | select(.disabled == false)] | length')
-is_active=$(hyprctl monitors -j | jq -r ".[] | select(.name == \"$MONITOR\" and .disabled == false) | .name")
+is_active=$(hyprctl monitors -j | jq -r --arg mon "$MONITOR" '.[] | select(.name == $mon and .disabled == false) | .name')
 
 if [[ -n "$is_active" ]]; then
     # Monitor is active — try to disable it

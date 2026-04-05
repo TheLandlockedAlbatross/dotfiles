@@ -23,7 +23,7 @@ else
 
   INDEX=-1
   for i in "${!BACKGROUNDS[@]}"; do
-    if [[ ${BACKGROUNDS[$i]} == $CURRENT_BACKGROUND ]]; then
+    if [[ ${BACKGROUNDS[$i]} == "$CURRENT_BACKGROUND" ]]; then
       INDEX=$i
       break
     fi

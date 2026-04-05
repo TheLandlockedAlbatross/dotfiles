@@ -818,7 +818,6 @@ pool_ops() {
                 if [[ -n "$label" ]]; then luks_labels+=("$d ($label)")
                 else local sz; sz=$(lsblk -ndo SIZE "$d" 2>/dev/null); luks_labels+=("$d (${sz:-unknown})"); fi
               done
-              local pick_label
               cmd_select "Unlock which device?" "${luks_labels[@]}" || break
               local pick_label="$CMD_RESULT"
               [[ -z "$pick_label" ]] && break
@@ -915,10 +914,10 @@ pool_ops() {
 
         # Capture backing devices BEFORE export
         local mapper_devs=()
-        local vdevs
-        vdevs=$(zpool status -LP "$pool" 2>/dev/null | awk '/\/dev\//{print $1}') || true
-        if [[ -n "$vdevs" ]]; then
-          for dev in $vdevs; do
+        local -a vdevs
+        mapfile -t vdevs < <(zpool status -LP "$pool" 2>/dev/null | awk '/\/dev\//{print $1}')
+        if (( ${#vdevs[@]} > 0 )); then
+          for dev in "${vdevs[@]}"; do
             if [[ "$dev" == /dev/mapper/* ]]; then
               mapper_devs+=("$(basename "$dev")")
             elif [[ "$dev" == /dev/dm-* ]]; then
