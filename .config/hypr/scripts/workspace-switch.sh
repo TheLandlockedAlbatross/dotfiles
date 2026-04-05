@@ -1,5 +1,6 @@
 #!/bin/bash
-TARGET=$1
+TARGET="$1"
+[[ $TARGET =~ ^[0-9]+$ ]] || exit 1
 PREV_FILE=/tmp/hypr-workspace-prev
 SPLIT_STATE=/tmp/hypr-workspace-split
 CURRENT=$(hyprctl activeworkspace -j | jq .id)
@@ -18,6 +19,22 @@ if [[ -f $SPLIT_STATE ]]; then
     else
       [[ $mode == "normal" ]] && SPLIT_DEST="$mon_b" || SPLIT_DEST="$mon_a"
     fi
+  fi
+fi
+
+# Pre-switch workspace background (if feature is active)
+WS_BG_MAP="/tmp/hypr-workspace-bg-map"
+if [[ -f $WS_BG_MAP ]]; then
+  if [[ "$CURRENT" == "$TARGET" ]]; then
+    PREV=$(cat "$PREV_FILE" 2>/dev/null)
+    [[ -n $PREV ]] && BG_TARGET="$PREV" || BG_TARGET="$TARGET"
+  else
+    BG_TARGET="$TARGET"
+  fi
+  BG=$(sed -n "${BG_TARGET}p" "$WS_BG_MAP")
+  if [[ -n $BG ]]; then
+    awww img "$BG" --transition-type none >/dev/null 2>&1
+    sleep "$(cat /tmp/hypr-workspace-bg-framedur 2>/dev/null || echo 0.03)"
   fi
 fi
 

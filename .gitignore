@@ -11,6 +11,7 @@
 !.config/omarchy/themes/ethereal-extended/**
 !.config/omarchy/hooks/
 !.config/omarchy/hooks/*
+!.config/omarchy/workspace-backgrounds.conf
 !.config/omarchy/extensions/
 !.config/omarchy/extensions/*
 .config/omarchy/hooks/*.sample

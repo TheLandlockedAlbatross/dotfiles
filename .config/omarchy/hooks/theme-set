@@ -26,3 +26,6 @@ elif [ "$wants_active" = false ] && [ "$has_active" = "true" ]; then
   mv "$TEMP" "$CONFIG"
   omarchy-restart-waybar &
 fi
+
+# Rebuild workspace background mapping if active
+~/.config/hypr/scripts/workspace-backgrounds.sh rebuild
