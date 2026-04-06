@@ -59,9 +59,12 @@
   margin: 0 7.5px;
 }
 
-#custom-expand-icon,
-#tray {
+#custom-expand-icon {
   margin: 0;
+}
+
+#tray {
+  margin: 0 7.5px;
 }
 
 #custom-screen-temperature,

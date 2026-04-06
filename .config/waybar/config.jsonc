@@ -15,7 +15,7 @@
     "custom/screenrecording-indicator"
   ],
   "modules-right": [
-    "group/tray-expander",
+    "tray",
     "custom/poll-rate",
     "bluetooth",
     "custom/network",
