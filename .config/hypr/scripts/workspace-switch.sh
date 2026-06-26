@@ -3,7 +3,7 @@ TARGET="$1"
 [[ $TARGET =~ ^[0-9]+$ ]] || exit 1
 PREV_FILE=/tmp/hypr-workspace-prev
 SPLIT_STATE=/tmp/hypr-workspace-split
-CURRENT=$(hyprctl activeworkspace -j | jq .id)
+read -r FOCUSED_MON CURRENT < <(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.activeWorkspace.id)"')
 
 # If workspace split is active, determine the correct monitor
 SPLIT_DEST=""
@@ -32,8 +32,9 @@ if [[ -f $WS_BG_MAP ]]; then
     BG_TARGET="$TARGET"
   fi
   BG=$(sed -n "${BG_TARGET}p" "$WS_BG_MAP")
-  if [[ -n $BG ]]; then
-    awww img "$BG" --transition-type none >/dev/null 2>&1
+  BG_MON="${SPLIT_DEST:-$FOCUSED_MON}"
+  if [[ -n $BG && -n $BG_MON ]]; then
+    awww img -o "$BG_MON" "$BG" --transition-type none >/dev/null 2>&1
     sleep "$(cat /tmp/hypr-workspace-bg-framedur 2>/dev/null || echo 0.03)"
   fi
 fi

@@ -1,7 +1,10 @@
 #!/bin/bash
-B=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
-if [ -z "$B" ]; then
+source "$(dirname "$0")/brightness-lib.sh"
+
+mon=$(target_monitor)
+b=$(read_brightness "$mon")
+if [[ -z "$b" ]]; then
   echo '{"text": "", "class": "hidden"}'
 else
-  echo "{\"text\": \"󰖨 ${B}%\", \"tooltip\": \"Brightness: ${B}%\"}"
+  echo "{\"text\": \"󰖨 ${b}%\", \"tooltip\": \"Brightness on ${mon}: ${b}%\"}"
 fi

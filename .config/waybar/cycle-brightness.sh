@@ -1,18 +1,20 @@
 #!/bin/bash
-# Cycle screen brightness with wrap-around, snapping clicks to nearest 10%
+# Cycle brightness on focused display with wrap-around, snapping clicks to nearest 10%.
+source "$(dirname "$0")/brightness-lib.sh"
 
-brightness=$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d '%')
+mon=$(target_monitor)
+brightness=$(read_brightness "$mon")
+[[ -z "$brightness" ]] && exit 0
+
 step="${1:--10}"
 abs=${step#-}
 
 if (( abs >= 10 )); then
-  # Round toward step direction to nearest multiple
   if (( step < 0 )); then
     next=$(( (brightness - 1) / abs * abs ))
   else
     next=$(( (brightness + abs) / abs * abs ))
   fi
-  # If already on a boundary, move one full step
   if (( next == brightness )); then
     next=$(( brightness + step ))
   fi
@@ -26,4 +28,5 @@ elif (( next > 100 )); then
   next=0
 fi
 
-brightnessctl set "${next}%"
+set_brightness "$mon" "$next" >/dev/null
+show_osd "$mon" "$next"

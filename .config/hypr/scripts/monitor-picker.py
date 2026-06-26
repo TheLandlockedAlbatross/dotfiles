@@ -69,11 +69,18 @@ def _build_mon_info(entry):
     mode = _best_mode(entry)
     pos = entry.get("position", {"x": 0, "y": 0})
     phys = entry.get("physical_size", {})
+    w = mode["width"] if mode else 0
+    h = mode["height"] if mode else 0
+    rates = sorted({
+        int(m["refresh"]) for m in entry.get("modes", [])
+        if m.get("width") == w and m.get("height") == h
+    }) or ([int(mode["refresh"])] if mode else [60])
     return {
         "name": entry["name"],
-        "width": mode["width"] if mode else 0,
-        "height": mode["height"] if mode else 0,
+        "width": w,
+        "height": h,
         "rate": int(mode["refresh"]) if mode else 60,
+        "rates": rates,
         "scale": entry.get("scale", 1.0),
         "x": pos.get("x", 0),
         "y": pos.get("y", 0),
@@ -264,7 +271,14 @@ class MonitorPicker(Gtk.Window):
         self.offset = 0     # perpendicular offset in logical pixels
         self.new_scale_tenths = _scale_tenths_from(new_mon)  # integer: scale * 10
         self.orig_scale_tenths = self.new_scale_tenths
-        self.result = None   # will hold (current_config, new_config) on confirm
+        self.new_rates = list(new_mon.get("rates") or [new_mon["rate"]])
+        try:
+            self.rate_index = self.new_rates.index(new_mon["rate"])
+        except ValueError:
+            self.rate_index = len(self.new_rates) - 1
+        self.edit_mode = False
+        self.cmd_edited = False
+        self.result = None   # will hold tuple of config strings on confirm
 
         # Layer shell setup
         GtkLayerShell.init_for_window(self)
@@ -299,7 +313,7 @@ class MonitorPicker(Gtk.Window):
         cmd_box.set_halign(Gtk.Align.CENTER)
         cmd_box.set_margin_bottom(46)
 
-        self.cmd_prefix_label = Gtk.Label(label="Setup commands (to be run):")
+        self.cmd_prefix_label = Gtk.Label(label="Setup commands (to be run) — e: edit:")
         self.cmd_prefix_label.set_xalign(0)
         css_prefix = Gtk.CssProvider()
         css_prefix.load_from_data(
@@ -317,7 +331,7 @@ class MonitorPicker(Gtk.Window):
         self.cmd_css = Gtk.CssProvider()
         self.cmd_css.load_from_data(
             b"textview, textview text { color: #66e6a0; font-family: monospace;"
-            b"  font-size: 12px; background: transparent; }"
+            b"  font-size: 12px; background: transparent; caret-color: #ffcc33; }"
             b"textview text selection { background-color: #3388cc; color: white; }"
         )
         self.cmd_view.get_style_context().add_provider(
@@ -351,6 +365,15 @@ class MonitorPicker(Gtk.Window):
         key = Gdk.keyval_name(event.keyval)
         ctrl = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.SHIFT_MASK)
+        # In edit mode, Esc exits edit mode; Ctrl+Enter confirms;
+        # everything else goes to the textview for normal typing.
+        if self.edit_mode:
+            if key == "Escape":
+                self._exit_edit_mode()
+                return True
+            if ctrl and key in ("Return", "KP_Enter"):
+                return self.on_key(widget, event)
+            return False
         # Let the textview handle Ctrl+C, Ctrl+A, and Shift+Arrow for selection
         # (but NOT Shift+Arrow when it's a fine-tune key — forward those to on_key)
         if ctrl and key in ("c", "C", "a", "A"):
@@ -369,17 +392,35 @@ class MonitorPicker(Gtk.Window):
         ctrl = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.CONTROL_MASK)
 
         if key == "Escape":
+            if self.edit_mode:
+                self._exit_edit_mode()
+                return True
             Gtk.main_quit()
             return True
 
+        # In edit mode, let the textview handle everything except Ctrl+Enter
+        # (confirm) — including arrows, Home/End, typing, selection.
+        if self.edit_mode and widget is not self.cmd_view:
+            if ctrl and key in ("Return", "KP_Enter"):
+                pass  # fall through to confirm handling below
+            else:
+                return False
+
         if key in ("Return", "KP_Enter"):
-            cur_cfg = _mon_config_str(self.current)
-            new_cfg = self._new_config_str()
-            self.result = (cur_cfg, new_cfg)
-            rewrite_monitors_conf({
-                self.current["name"]: cur_cfg,
-                self.new_mon["name"]: new_cfg,
-            })
+            if self.cmd_edited:
+                configs = self._parse_edited_cmd()
+                if not configs:
+                    return True  # unparseable — ignore Enter
+                self.result = tuple(configs)
+                rewrite_monitors_conf({c.split(",", 1)[0].strip(): c for c in configs})
+            else:
+                cur_cfg = _mon_config_str(self.current)
+                new_cfg = self._new_config_str()
+                self.result = (cur_cfg, new_cfg)
+                rewrite_monitors_conf({
+                    self.current["name"]: cur_cfg,
+                    self.new_mon["name"]: new_cfg,
+                })
             Gtk.main_quit()
             return True
 
@@ -437,7 +478,77 @@ class MonitorPicker(Gtk.Window):
             self._update_cmd()
             return True
 
+        # r / R — cycle available refresh rates for the new monitor
+        if key == "r" and self.new_rates:
+            self.rate_index = min(len(self.new_rates) - 1, self.rate_index + 1)
+            self.new_mon["rate"] = self.new_rates[self.rate_index]
+            self.darea.queue_draw()
+            self._update_cmd()
+            return True
+        if key == "R" and self.new_rates:
+            self.rate_index = max(0, self.rate_index - 1)
+            self.new_mon["rate"] = self.new_rates[self.rate_index]
+            self.darea.queue_draw()
+            self._update_cmd()
+            return True
+
+        # e — enter edit mode (direct text editing of the setup commands)
+        if key == "e":
+            self._enter_edit_mode()
+            return True
+
         return False
+
+    # ── Edit mode ─────────────────────────────────────────────────────
+
+    def _enter_edit_mode(self):
+        """Enable direct editing of the command textview.
+
+        Replaces the $(( )) display commands with evaluated numeric commands
+        so the user edits concrete values. Position/scale keys become inert
+        until Esc exits edit mode.
+        """
+        self.edit_mode = True
+        cur_cfg = _mon_config_str(self.current)
+        new_cfg = self._new_config_str()
+        text = (
+            f'hyprctl keyword monitor "{cur_cfg}"\n'
+            f'hyprctl keyword monitor "{new_cfg}"'
+        )
+        buf = self.cmd_view.get_buffer()
+        buf.set_text(text)
+        self.cmd_view.set_editable(True)
+        self.cmd_view.set_cursor_visible(True)
+        self.cmd_prefix_label.set_text(
+            "Editing setup commands — Esc: done  ·  Ctrl+Enter: confirm:"
+        )
+        self.cmd_view.grab_focus()
+        buf.place_cursor(buf.get_end_iter())
+
+    def _exit_edit_mode(self):
+        """Leave edit mode; preserve the edited buffer as authoritative."""
+        self.edit_mode = False
+        self.cmd_edited = True
+        self.cmd_view.set_editable(False)
+        self.cmd_view.set_cursor_visible(False)
+        self.cmd_prefix_label.set_text(
+            "Setup commands (edited — Enter to apply, any arrow/s/S/r/R to regenerate):"
+        )
+        self.darea.grab_focus()
+
+    def _parse_edited_cmd(self):
+        """Extract quoted monitor config strings from the edited textview."""
+        import re
+        buf = self.cmd_view.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        configs = []
+        for line in text.splitlines():
+            m = re.search(
+                r'hyprctl\s+keyword\s+monitor\s+"([^"]+)"', line.strip()
+            )
+            if m:
+                configs.append(m.group(1))
+        return configs
 
     def _sync_scale(self):
         """Keep new_mon['scale'] in sync with new_scale_tenths for geometry calcs."""
@@ -598,14 +709,23 @@ class MonitorPicker(Gtk.Window):
         return f"{cur_cmd}\n{new_cmd}"
 
     def _update_cmd(self):
-        """Refresh the command textview text and color."""
+        """Refresh the command textview text and color.
+
+        Skipped while the user is actively editing. If a previous edit has
+        been preserved (cmd_edited), regenerating from state discards it.
+        """
+        if self.edit_mode:
+            return
+        if self.cmd_edited:
+            self.cmd_edited = False
+            self.cmd_prefix_label.set_text("Setup commands (to be run) — e: edit:")
         cmd_text = self._build_display_cmd()
         bx, by = calc_hypr_position(self.position, self.current, self.new_mon, self.offset)
         overlap = monitors_overlap(self.current, bx, by, self.new_mon)
         color = "#ff5a4d" if overlap else "#66e6a0"
         self.cmd_css.load_from_data(
             f"textview, textview text {{ color: {color}; font-family: monospace;"
-            f"  font-size: 12px; background: transparent; }}"
+            f"  font-size: 12px; background: transparent; caret-color: #ffcc33; }}"
             f"textview text selection {{ background-color: #3388cc; color: white; }}"
             .encode()
         )
@@ -702,7 +822,7 @@ class MonitorPicker(Gtk.Window):
         bottom_y = sh - 30
 
         # Row 1 (lowest): hint bar
-        hint = "Arrows: position  \u00b7  Alt+Arrow: fine-tune \u00b125  \u00b7  Shift+Arrow: \u00b11  \u00b7  s/S: scale \u00b10.1  \u00b7  Ctrl+C: copy  \u00b7  Enter: confirm  \u00b7  Esc: cancel"
+        hint = "Arrows: position  \u00b7  Alt/Shift+Arrow: offset  \u00b7  s/S: scale \u00b10.1  \u00b7  r/R: refresh rate  \u00b7  e: edit cmd  \u00b7  Ctrl+C: copy  \u00b7  Enter: confirm  \u00b7  Esc: cancel"
         cr.set_source_rgba(1, 1, 1, 0.45)
         cr.set_font_size(14)
         te = cr.text_extents(hint)
@@ -823,9 +943,8 @@ def main():
     Gtk.main()
 
     if picker.result:
-        cur_cfg, new_cfg = picker.result
-        print(cur_cfg)
-        print(new_cfg)
+        for cfg in picker.result:
+            print(cfg)
         sys.exit(0)
     else:
         sys.exit(1)
