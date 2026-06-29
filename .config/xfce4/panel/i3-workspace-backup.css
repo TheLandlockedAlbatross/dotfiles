@@ -1,0 +1,18 @@
+.workspace {
+    color: #FFFFFF;
+    font-family: "Symbols Nerd Font", sans-serif;
+    font-size: 22px;
+}
+.workspace.visible {
+    background-color: #4b8501;
+}
+.workspace.focused {
+    border-width: 2px;
+    border-style: solid;
+    border-color: white;
+}
+.workspace.urgent {
+    background-color: red;
+}
+.binding-mode { }
+

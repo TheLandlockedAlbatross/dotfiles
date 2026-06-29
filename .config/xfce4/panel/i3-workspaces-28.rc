@@ -1,0 +1,11 @@
+use_css=true
+normal_color=rgb(0,0,0)
+focused_color=rgb(0,0,0)
+urgent_color=rgb(255,0,0)
+mode_color=rgb(255,0,0)
+visible_color=rgb(0,0,0)
+css=.workspace { \n\tcolor: #FFFFFF;\n\tfont-family: "Symbols Nerd Font", sans-serif;\n\tfont-size: 16px;\n\tmargin-left: 2px;\n\tmargin-right: 2px;\n}\n.workspace.visible { \n\tcolor: #FF7800;\n\tfont-size: 20px;\n}\n.workspace.focused { \n\tfont-weight: bold; \n}\n.workspace.urgent { color: red; }\n.binding-mode { }\n
+strip_workspace_numbers=false
+auto_detect_outputs=true
+output=DP-0
+

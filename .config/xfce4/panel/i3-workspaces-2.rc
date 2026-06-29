@@ -1,0 +1,11 @@
+use_css=true
+normal_color=rgb(0,0,0)
+focused_color=rgb(0,0,0)
+urgent_color=rgb(255,0,0)
+mode_color=rgb(255,0,0)
+visible_color=rgb(0,0,0)
+css=.workspace {\n    color: #FFFFFF;\n    font-family: "Symbols Nerd Font", sans-serif;\n    font-size: 22px;\n}\n.workspace.visible {\n    background-color: #4b8501;\n}\n.workspace.focused {\n    border-width: 2px;\n    border-style: solid;\n    border-color: white;\n}\n.workspace.urgent {\n    background-color: red;\n}\n.binding-mode { }\n
+strip_workspace_numbers=false
+auto_detect_outputs=false
+output=HDMI-0
+
