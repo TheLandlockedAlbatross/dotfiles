@@ -40,6 +40,8 @@
 !.config/waybar/screen-brightness.sh
 !.config/waybar/screen-temperature.sh
 !.config/waybar/screen-display-toggle.sh
+!.config/i3/
+!.config/i3/**
 !.mozilla/
 !.mozilla/firefox/
 !.mozilla/firefox/encrypted_MEO_firefox_profiles.tar.zst
