@@ -3,10 +3,18 @@
 source "$(dirname "$0")/brightness-lib.sh"
 
 mon=$(target_monitor)
+step="${1:--10}"
+
+# Internal panel: dim through the backlight, then gamma below the hardware floor.
+if [[ "$mon" == "eDP-1" ]]; then
+  edp_dim "$step"
+  show_dim_osd "$mon"
+  exit 0
+fi
+
 brightness=$(read_brightness "$mon")
 [[ -z "$brightness" ]] && exit 0
 
-step="${1:--10}"
 abs=${step#-}
 
 if (( abs >= 10 )); then
