@@ -1,26 +1,7 @@
 #!/bin/bash
 profile=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null)
 watts_raw=$(awk '{printf "%.0f", $1 / 1000000}' /sys/class/power_supply/BAT0/power_now 2>/dev/null || echo "0")
-
-case "$profile" in
-  performance) icon="󰈸" ;;
-  balanced)    icon="󰗑" ;;
-  quiet)       icon="󰌪" ;;
-  *)           icon="󱐋" ;;
-esac
-
-cpu_ghz=$(awk '{sum += $1; n++} END {printf "%.1f", sum / n / 1000000}' /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null || echo "N/A")
-
 status=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null)
-
-# Per-core CPU usage
-cpu_usage=$(awk '/^cpu[0-9]/ {
-  idle = $5; total = 0;
-  for (i=2; i<=NF; i++) total += $i;
-  printf "CPU%d: %.0f%%\\n", n++, (1 - idle/total) * 100;
-}' /proc/stat 2>/dev/null)
-
-tooltip="${cpu_ghz}GHz\\n${cpu_usage}"
 
 # System power draw (PPT) from amdgpu hwmon
 get_system_watts() {
@@ -32,6 +13,44 @@ get_system_watts() {
   done
   echo "0"
 }
+
+# Watts actually drawn by the system, for coloring the flame icon.
+# On battery, BAT0/power_now is the real draw. On AC, power_now reports charge
+# power *added* to the battery (not consumption), so use amdgpu PPT instead.
+if [[ "$status" == "Discharging" ]]; then
+  draw_watts="$watts_raw"; draw_lo=7; draw_hi=20
+else
+  draw_watts=$(get_system_watts); draw_lo=30; draw_hi=100
+fi
+
+# Flame (performance): white->pink by actual draw watts.
+# Leaf (quiet/power-saver): VPN-connected green (#88bb88 from network-vpn.sh).
+case "$profile" in
+  performance)
+    fcolor=$(awk -v w="$draw_watts" -v lo="$draw_lo" -v hi="$draw_hi" 'BEGIN {
+      if (w <= lo) { printf "#ffffff"; }
+      else {
+        ratio = (w - lo) / (hi - lo); if (ratio > 1) ratio = 1;
+        g = int(255 - ratio * (255 - 136));
+        printf "#ff%02x%02x", g, g;
+      }
+    }')
+    icon="<span color='$fcolor'>󰈸</span>" ;;
+  balanced)    icon="󰗑" ;;
+  quiet)       icon="<span color='#88bb88'>󰌪</span>" ;;
+  *)           icon="󱐋" ;;
+esac
+
+cpu_ghz=$(awk '{sum += $1; n++} END {printf "%.1f", sum / n / 1000000}' /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq 2>/dev/null || echo "N/A")
+
+# Per-core CPU usage
+cpu_usage=$(awk '/^cpu[0-9]/ {
+  idle = $5; total = 0;
+  for (i=2; i<=NF; i++) total += $i;
+  printf "CPU%d: %.0f%%\\n", n++, (1 - idle/total) * 100;
+}' /proc/stat 2>/dev/null)
+
+tooltip="${cpu_ghz}GHz\\n${cpu_usage}"
 
 case "$status" in
   Discharging)
