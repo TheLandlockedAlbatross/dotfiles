@@ -29,3 +29,6 @@ fi
 
 # Rebuild workspace background mapping if active
 ~/.config/hypr/scripts/workspace-backgrounds.sh rebuild
+
+# Re-apply notify-focus Tier 2 alert styling (theme regeneration wipes it)
+~/.config/hypr/scripts/notify-focus-mako.sh

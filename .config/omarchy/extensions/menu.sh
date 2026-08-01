@@ -25,21 +25,23 @@ show_monitors_menu() {
 }
 
 show_vpn_menu() {
-  local status options=""
-  status=$(mullvad status)
+  source ~/.config/hypr/scripts/vpn-lib.sh
 
-  if echo "$status" | head -1 | grep -q Connected; then
+  local status options=""
+  status=$(vpn_status)
+
+  if vpn_is_connected "$status"; then
     local relay country_code country_name
-    relay=$(echo "$status" | grep Relay | tr -s " " | cut -d" " -f3)
-    country_code=$(echo "$relay" | cut -d- -f1)
-    country_name=$(mullvad relay list | grep -E "^\S" | grep "($country_code)" | head -1 | sed 's/ *(.*//;s/^ *//')
+    relay=$(vpn_relay "$status")
+    country_code=$(vpn_relay_country "$relay")
+    country_name=$(vpn_country_name "$country_code")
     options="  $country_name ($country_code)"
   else
     options="󰖪  Disconnected"
   fi
 
   # Incognito toggle
-  if [[ -f /tmp/waybar-incognito ]]; then
+  if [[ -f "$VPN_INCOGNITO_FILE" ]]; then
     options="$options\n󰗹  Incognito: ON"
   else
     options="$options\n󰗹  Incognito: OFF"
@@ -52,7 +54,7 @@ show_vpn_menu() {
     name=$(echo "$line" | sed 's/ *(.*//;s/^ *//')
     [[ "$code" == "$country_code" ]] && continue
     options="$options\n󰕥  $name ($code)"
-  done < <(mullvad relay list | grep -E "^\S")
+  done < <(vpn_countries)
 
   local selected
   selected=$(menu "VPN" "$options")
@@ -68,28 +70,31 @@ show_vpn_menu() {
     sel_name=$(echo "$selected" | sed 's/^[^ ]* *//;s/ *(.*//')
     if [[ -n "$sel_code" ]]; then
       local swayosd="$HOME/.config/hypr/scripts/swayosd-focused.sh"
-      "$swayosd" --custom-icon security-high --custom-message "Mullvad Connecting to $sel_name..."
-      mullvad relay set location "$sel_code"
-      if echo "$status" | head -1 | grep -q Connected; then
-        mullvad reconnect
+      "$swayosd" --custom-icon security-high --custom-message "$VPN_NAME Connecting to $sel_name..."
+      vpn_set_location "$sel_code"
+      if vpn_is_connected "$status"; then
+        vpn_reconnect
       else
-        mullvad connect
+        vpn_connect
       fi
-      while ! mullvad status | head -1 | grep -q Connected; do sleep 0.5; done
-      local S R
-      S=$(mullvad status)
-      R=$(echo "$S" | grep Relay | tr -s " " | cut -d" " -f3)
-      "$swayosd" --custom-icon security-high --custom-message "Mullvad Connected to $sel_name ($R)"
+      while ! vpn_is_connected; do sleep 0.5; done
+      local R
+      R=$(vpn_relay)
+      "$swayosd" --custom-icon security-high --custom-message "$VPN_NAME Connected to $sel_name ($R)"
     fi
     ;;
   esac
+}
+
+show_notify_focus_menu() {
+  ~/.config/hypr/scripts/notify-focus-menu.sh
 }
 
 show_setup_menu() {
   local options="󰕾  Audio\n󰖩  Wifi\n󰂯  Bluetooth\n󱐋  Power Profile\n󰒲  System Sleep\n󰍹  Monitors"
   [ -f ~/.config/hypr/bindings.conf ] && options="$options\n󰌌  Keybindings"
   [ -f ~/.config/hypr/input.conf ] && options="$options\n󰌌  Input"
-  options="$options\n󰱔  DNS\n󰕥  VPN\n󰒃  Security\n󰒓  Config"
+  options="$options\n󰄰  Auto-focus\n󰱔  DNS\n󰕥  VPN\n󰒃  Security\n󰒓  Config"
 
   case $(menu "Setup" "$options") in
   *Audio*) omarchy-launch-audio ;;
@@ -100,6 +105,7 @@ show_setup_menu() {
   *Monitors*) show_monitors_menu ;;
   *Keybindings*) open_in_editor ~/.config/hypr/bindings.conf ;;
   *Input*) open_in_editor ~/.config/hypr/input.conf ;;
+  *Auto-focus*) show_notify_focus_menu ;;
   *DNS*) present_terminal omarchy-setup-dns ;;
   *VPN*) show_vpn_menu ;;
   *Security*) show_setup_security_menu ;;
