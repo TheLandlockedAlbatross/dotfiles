@@ -1,9 +1,13 @@
 #!/bin/bash
-# Waybar custom/network module: replicate vanilla network widget + Mullvad VPN overlay
+# Waybar custom/network module: replicate vanilla network widget + VPN overlay
 # Outputs JSON: {"text": "...", "tooltip": "...", "class": "..."}
 
+source "$HOME/.config/hypr/scripts/vpn-lib.sh"
+
 BW_FILE="/tmp/waybar-net-bw"
-INCOGNITO_FILE="/tmp/waybar-incognito"
+
+VPN_UP_COLOR="#88bb88"
+VPN_DOWN_COLOR="#bb5555"
 
 fmt_bw() {
     local bytes=$1
@@ -40,13 +44,13 @@ calc_bw() {
 # --- Find default interface ---
 default_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
 
-# --- Determine physical interface (skip VPN/virtual) ---
-if [[ "$default_iface" == wg* ]]; then
+# --- Determine physical interface (route may point at the VPN tunnel) ---
+if vpn_iface_pattern "$default_iface"; then
     phys_iface=""
-    for d in /sys/class/net/*/carrier; do
+    # A real NIC has a /device symlink; tunnels, bridges and veths do not.
+    for d in /sys/class/net/*/device; do
         iface=$(basename "$(dirname "$d")")
-        [[ "$iface" == lo || "$iface" == docker* || "$iface" == veth* || "$iface" == br-* || "$iface" == wg* ]] && continue
-        [[ "$(cat "$d" 2>/dev/null)" == "1" ]] || continue
+        [[ "$(cat "/sys/class/net/$iface/carrier" 2>/dev/null)" == "1" ]] || continue
         phys_iface="$iface"
         break
     done
@@ -96,18 +100,18 @@ else
 fi
 
 # --- VPN overlay (skip if incognito) ---
-if [[ ! -f "$INCOGNITO_FILE" ]] && command -v mullvad &>/dev/null && [[ -n "$phys_iface" ]]; then
-    VPN_STATUS=$(timeout 1 mullvad status 2>/dev/null)
-    if echo "$VPN_STATUS" | head -1 | grep -q Connected; then
-        RELAY=$(echo "$VPN_STATUS" | grep Relay | tr -s " " | cut -d" " -f3)
-        COUNTRY_CODE=$(echo "$RELAY" | cut -d- -f1)
-        COUNTRY_NAME=$(mullvad relay list 2>/dev/null | grep -E "^\S" | grep "($COUNTRY_CODE)" | head -1 | sed 's/ *(.*//;s/^ *//')
-        ICON="<span color='#88bb88'>$ICON</span>"
+# Recolours the link icon in place; the glyph itself never changes.
+if [[ ! -f "$VPN_INCOGNITO_FILE" ]] && vpn_available && [[ -n "$phys_iface" ]]; then
+    VPN_STATUS=$(vpn_status 1)
+    if vpn_is_connected "$VPN_STATUS"; then
+        RELAY=$(vpn_relay "$VPN_STATUS")
+        COUNTRY_NAME=$(vpn_country_name "$(vpn_relay_country "$RELAY")")
+        ICON="<span color='$VPN_UP_COLOR'>$ICON</span>"
         TOOLTIP="$TOOLTIP\\n  $COUNTRY_NAME ($RELAY)"
         CLASS="vpn-connected"
     else
-        ICON="<span color='#bb5555'>$ICON</span>"
-        TOOLTIP="$TOOLTIP\\nVPN not connected!"
+        ICON="<span color='$VPN_DOWN_COLOR'>$ICON</span>"
+        TOOLTIP="$TOOLTIP\\n$VPN_NAME not connected!"
         CLASS="vpn-disconnected"
     fi
 fi

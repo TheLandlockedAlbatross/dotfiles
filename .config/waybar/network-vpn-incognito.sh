@@ -1,13 +1,14 @@
 #!/bin/bash
 # Toggle VPN overlay visibility in the waybar network widget
 
-INCOGNITO_FILE="/tmp/waybar-incognito"
+source "$HOME/.config/hypr/scripts/vpn-lib.sh"
+
 SWAYOSD="$HOME/.config/hypr/scripts/swayosd-focused.sh"
 
-if [[ -f "$INCOGNITO_FILE" ]]; then
-    rm "$INCOGNITO_FILE"
+if [[ -f "$VPN_INCOGNITO_FILE" ]]; then
+    rm "$VPN_INCOGNITO_FILE"
     "$SWAYOSD" --custom-icon security-high --custom-message "VPN overlay: visible"
 else
-    touch "$INCOGNITO_FILE"
+    touch "$VPN_INCOGNITO_FILE"
     "$SWAYOSD" --custom-icon security-low --custom-message "VPN overlay: hidden"
 fi
