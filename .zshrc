@@ -6,13 +6,54 @@
 # If not running interactively, don't do anything
 [[ "$-" != *i* ]] && return
 
-ZSH_THEME="powerlevel10k/powerlevel10k"
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+# Read the saved prompt choice early so p10k's instant prompt can run before anything prints
+# (choice is made/changed via prompt-pick, defined in the Prompt section below)
+ZSH_PROMPT_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/zsh/prompt"
+[[ -r "$ZSH_PROMPT_FILE" ]] && ZSH_PROMPT=$(<"$ZSH_PROMPT_FILE") || ZSH_PROMPT=""
+if [[ "$ZSH_PROMPT" == p10k && -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
     source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
 export ZSH="${HOME}/.zsh"
 mkdir -p "${ZSH}"
+
+####################################################################################################
+# Prompt
+####################################################################################################
+# Asks once (none | p10k | starship, the latter only when installed), remembers the answer in
+# $ZSH_PROMPT_FILE; run prompt-pick anytime to change it
+prompt-pick() {
+    local -a options=(none p10k)
+    (( $+commands[starship] )) && options+=(starship)
+    local choice
+    local PS3="Prompt? "
+    select choice in $options; do
+        [[ -n "$choice" ]] && break
+    done
+    mkdir -p "${ZSH_PROMPT_FILE:h}"
+    print -r -- "$choice" >| "$ZSH_PROMPT_FILE"
+    ZSH_PROMPT="$choice"
+    print "Prompt set to '${choice}' — run 'exec zsh' to apply."
+}
+
+# First run (no saved choice yet): ask, but only on a real terminal
+if [[ -z "$ZSH_PROMPT" && -t 0 && -t 1 ]]; then
+    prompt-pick
+fi
+
+case "$ZSH_PROMPT" in
+    p10k)
+        if [[ ! -d ${ZSH}/themes/powerlevel10k ]]; then
+            git clone --depth 1 -- https://github.com/romkatv/powerlevel10k.git "${ZSH}/themes/powerlevel10k/"
+        fi
+        source "${ZSH}/themes/powerlevel10k/powerlevel10k.zsh-theme"
+        # To customize, run `p10k configure` or edit ~/.p10k.zsh
+        [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+        ;;
+    starship)
+        (( $+commands[starship] )) && eval "$(starship init zsh)"
+        ;;
+esac
 
 ####################################################################################################
 # Plugins
@@ -22,13 +63,8 @@ mkdir -p "${ZSH}/plugins"
 if [[ ! -f ${ZSH}/plugins/marlonrichert/znap/znap.zsh ]]; then
     git clone --depth 1 -- https://github.com/marlonrichert/zsh-snap.git "${ZSH}/plugins/marlonrichert/znap"
 fi
+zstyle ':znap:*' repos-dir "${ZSH}/plugins"
 source "${ZSH}/plugins/marlonrichert/znap/znap.zsh"
-
-# powerlevel10k
-if [[ ! -d ${ZSH}/themes/powerlevel10k ]]; then
-    git clone --depth 1 -- https://github.com/romkatv/powerlevel10k.git "${ZSH}/themes/powerlevel10k/"
-fi
-source "${ZSH}/themes/powerlevel10k/powerlevel10k.zsh-theme"
 
 #znap source marlonrichert/zsh-autocomplete
 
@@ -118,9 +154,6 @@ fi
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
-
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
