@@ -1,4 +1,8 @@
 qbt_inspect  () {
+    if ! command -v transmission-show &> /dev/null; then
+        echo "qbt_inspect: transmission-show not installed (transmission-cli package)"
+        return 1
+    fi
     if curl --head --silent --fail "${1}" &> /dev/null; then
         local temp="a.torrent" 
         curl -s -o "${temp}" "${1}"
@@ -12,6 +16,13 @@ qbit_yts_mx_download () {
     # Error/warning strings for logging
     local error_str="ERROR: $0"
     local warning_str="WARNING: $0"
+    local dep
+    for dep in curl rg qbittorrent transmission-show; do
+        if ! command -v "$dep" &> /dev/null; then
+            echo "${error_str} required command '$dep' not installed"
+            return 1
+        fi
+    done
     local exit_flag=0
     local src=""
     local dest=""
@@ -37,7 +48,7 @@ qbit_yts_mx_download () {
                         echo "${error_str} More than one URL specified"
                         local exit_flag=1
                     fi
-                elif [[ -d "${dest}" ]]; then
+                elif [[ -d "${1}" ]]; then
                     if [[ -z "${dest}" ]]; then 
                         local dest="${1}"
                     else

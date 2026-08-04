@@ -17,7 +17,8 @@ svnd () {
     fi
     modified_svn_files=()
     head_files=()
-    readarray -t modified_svn_files < <(svn status -q "${src}" | awk '{print $2}' | tr "\\\\" "/" | tr -d '\r')
+    # (f) splits on newlines; unquoted assignment drops empty elements (zsh has no readarray)
+    modified_svn_files=(${(f)"$(svn status -q "${src}" | awk '{print $2}' | tr "\\\\" "/" | tr -d '\r')"})
     for modified_svn_file in "${modified_svn_files[@]}"; do
         tmp_file="tmp.$(date +%s).$(basename ${modified_svn_file})"
         svn cat "${modified_svn_file}" > "/tmp/${tmp_file}"
@@ -28,8 +29,8 @@ svnd () {
         echo "${modified_svn_files[@]}"
         echo "${head_files[@]}"
     else
-        for i in $(eval echo "{0..$(( ${#head_files[@]} - 1 ))}"); do
-            if [[ "${i}" -eq 0 ]]; then
+        for (( i = 1; i <= ${#head_files[@]}; i++ )); do
+            if [[ "${i}" -eq 1 ]]; then
                 diff_cmd="vim -c 'set diffopt=filler,vertical' -c 'view ${head_files[${i}]}' -c 'diffsplit ${modified_svn_files[${i}]}' "
             else
                 diff_cmd="${diff_cmd} ; vim -c 'set diffopt=filler,vertical' -c 'view ${head_files[${i}]}' -c 'diffsplit ${modified_svn_files[${i}]}' "

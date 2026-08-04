@@ -2,16 +2,9 @@ alias a=alias
 alias n='nvim '
 alias rg="rg --hidden --glob '!.git' --glob '!.svn' --path-separator / "
 alias rp="realpath"
-alias ssh='sshrc'
+command -v sshrc &> /dev/null && alias ssh='sshrc'
 alias v='vim '
 alias vr='vim -R '
-# Show all current single character aliases and functions
-s () {
-    echo "Single Character Aliases: "
-    alias | \grep -o ' .=.*' | sed -nr "s/^ /\t/p"
-    echo "Single Character Functions: "
-    cat ~/.bashrc | \grep -Pzo '#.*\n. \(\).*\n' | sed -nr "s/^(. |# )/\t\1/p"
-}
 
 # Make a directory and cd into it immediately
 mcd_func () {

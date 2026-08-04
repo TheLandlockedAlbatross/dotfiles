@@ -1,4 +1,4 @@
-export LS_COLORS="$(vivid generate molokai)"
+command -v vivid &> /dev/null && export LS_COLORS="$(vivid generate molokai)"
 # alias l='clear && \ls -AhF --color=always '
 # alias ls='\ls -AFh --color=always' # add colors and file type extensions
 # alias la='\ls -AFlh --color=always' # long file names

@@ -1,4 +1,5 @@
 #!/bin/zsh
+
 ####################################################################################################
 # Preliminary
 ####################################################################################################
@@ -9,7 +10,6 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
     source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
-# NOTE: need to edit ~/.p10k.zsh POWERLEVEL9K_LEFT_PROMPT_ELEMENTS section for further customization of prompt
 
 export ZSH="${HOME}/.zsh"
 mkdir -p "${ZSH}"
@@ -37,7 +37,7 @@ if [[ ! -d ${ZSH}/plugins/zsh-users/zsh-autosuggestions/ ]]; then
 fi
 znap source zsh-users/zsh-autosuggestions
 
-if [[ ! -d ${ZSH}/plugins/zsh-users/zsh-autosuggestions/ ]]; then
+if [[ ! -d ${ZSH}/plugins/zsh-users/zsh-syntax-highlighting/ ]]; then
     git clone --depth 1 -- https://github.com/zsh-users/zsh-syntax-highlighting/ "${ZSH}/plugins/zsh-users/zsh-syntax-highlighting"
 fi
 znap source zsh-users/zsh-syntax-highlighting
@@ -64,34 +64,56 @@ export ZSH_CUSTOM="${ZSH}/custom"
 mkdir -p "${ZSH_CUSTOM}"
 
 # Get my custom aliases etc
-source <(cat "${ZSH}/custom/"*.zsh)
+#source <(cat "${ZSH}/custom/"*.zsh)
+for config_file ($ZSH_CUSTOM/*.zsh(N)); do
+    source "$config_file"
+done
+
+# X11-only scripts and env vars (skipped on Wayland/headless sessions)
+if [[ -z "${WAYLAND_DISPLAY}" && "${XDG_SESSION_TYPE}" != "wayland" && -n "${DISPLAY}" ]]; then
+    for config_file ($ZSH_CUSTOM/x11/*.zsh(N)); do
+        source "$config_file"
+    done
+fi
 
 # Speed up completion
 autoload -Uz compinit && compinit -C
+
+# Quick config editing
+alias ze="${EDITOR} ~/.zshrc ${ZSH}"
 
 ####################################################################################################
 # 3rd party scripts
 ####################################################################################################
 # Cargo
-if [[ -d  "$HOME/.cargo/env" ]]; then
+if [[ -f "$HOME/.cargo/env" ]]; then
     source "$HOME/.cargo/env"
 fi
 
-# nvm
-if [[ -d  "$HOME/.nvm" ]]; then
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# Go
+if [[ -d /usr/local/go ]]; then
+    # Set GOROOT
+    export GOROOT=/usr/local/go
+    # Set GOPATH
+    export GOPATH=$HOME/go
+    # Add Go binaries to the system path
+    export PATH=$GOPATH/bin:$GOROOT/bin:$PATH
 fi
 
-# Remove Homebrew from PATH if present
-export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v 'linuxbrew' | tr '\n' ':' | sed 's/:$//')
+# nvm
+export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # This loads nvm
 
-# Load Homebrew environment variables, but don't prepend to PATH
-eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv | grep -v '^export PATH=')"
+if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    # Remove Homebrew from PATH if present
+    export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v 'linuxbrew' | tr '\n' ':' | sed 's/:$//')
 
-# Append Homebrew's bin directories to the end of PATH
-export PATH="$PATH:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin"
+    # Load Homebrew environment variables, but don't prepend to PATH
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv | grep -v '^export PATH=')"
+
+    # Append Homebrew's bin directories to the end of PATH
+    export PATH="$PATH:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin"
+fi
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
@@ -102,5 +124,22 @@ export SDKMAN_DIR="$HOME/.sdkman"
 
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
-eval "$(pyenv init - zsh)"
-eval "$(pyenv virtualenv-init -)"
+if command -v pyenv &> /dev/null; then
+    eval "$(pyenv init - zsh)"
+    if pyenv commands | grep -q virtualenv-init; then
+        eval "$(pyenv virtualenv-init -)"
+    fi
+fi
+#eval "$(HISTFILE=${HISTFILE} atuin init zsh --disable-up-arrow)"
+
+
+# uv
+[[ -f "$HOME/.local/bin/env" ]] && . "$HOME/.local/bin/env"
+
+# Android
+[[ -d /opt/android-studio-for-platform/bin ]] && export PATH="$PATH:/opt/android-studio-for-platform/bin"
+if [[ -d $HOME/Android/Sdk ]]; then
+    export ANDROID_HOME=$HOME/Android/Sdk
+    export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+    export PATH=$PATH:$ANDROID_HOME/platform-tools
+fi

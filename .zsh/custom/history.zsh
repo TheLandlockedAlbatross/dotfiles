@@ -3,36 +3,33 @@
 # Mostly based on tips from https://www.soberkoder.com/unlimited-bash-history/
 ####################################################################################################
 
+# Shared HISTFILE settings, applied at startup and by hh when switching HISTFILE
+_hist_apply_settings() {
+    HISTSIZE=10000000
+    SAVEHIST=10000000
+    setopt BANG_HIST                 # Treat the '!' character specially during expansion.
+    setopt EXTENDED_HISTORY          # Write the history file in the ":start:elapsed;command" format.
+    setopt INC_APPEND_HISTORY        # Write to the history file immediately, not when the shell exits.
+    setopt SHARE_HISTORY             # Share history between all sessions.
+    setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicate entries first when trimming history.
+    setopt HIST_IGNORE_DUPS          # Don't record an entry that was just recorded again.
+    setopt HIST_IGNORE_ALL_DUPS      # Delete old recorded entry if new entry is a duplicate.
+    setopt HIST_FIND_NO_DUPS         # Do not display a line previously found.
+    setopt HIST_IGNORE_SPACE         # Don't record an entry starting with a space.
+    setopt HIST_SAVE_NO_DUPS         # Don't write duplicate entries in the history file.
+    setopt HIST_REDUCE_BLANKS        # Remove superfluous blanks before recording entry.
+    setopt HIST_VERIFY               # Don't execute immediately upon history expansion.
+    setopt HIST_BEEP                 # Beep when accessing nonexistent history.
+    setopt APPEND_HISTORY
+}
+
 # If custom ~/.zsh_history in current folder respect it
 if [[ -f "$(pwd)/.zsh_history" && "$(pwd)" != "${HOME}" ]]; then
     HISTFILE="$(pwd)/.zsh_history"
 else
     HISTFILE="$HOME/.zsh_history"
 fi
-
-# HISTFILE settings
-HISTSIZE=10000000
-SAVEHIST=10000000
-setopt BANG_HIST                 # Treat the '!' character specially during expansion.
-setopt EXTENDED_HISTORY          # Write the history file in the ":start:elapsed;command" format.
-setopt INC_APPEND_HISTORY        # Write to the history file immediately, not when the shell exits.
-setopt SHARE_HISTORY             # Share history between all sessions.
-setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicate entries first when trimming history.
-setopt HIST_IGNORE_DUPS          # Don't record an entry that was just recorded again.
-setopt HIST_IGNORE_ALL_DUPS      # Delete old recorded entry if new entry is a duplicate.
-setopt HIST_FIND_NO_DUPS         # Do not display a line previously found.
-setopt HIST_IGNORE_SPACE         # Don't record an entry starting with a space.
-setopt HIST_SAVE_NO_DUPS         # Don't write duplicate entries in the history file.
-setopt HIST_REDUCE_BLANKS        # Remove superfluous blanks before recording entry.
-setopt HIST_VERIFY               # Don't execute immediately upon history expansion.
-setopt HIST_BEEP                 # Beep when accessing nonexistent history.
-setopt APPEND_HISTORY
-setopt INC_APPEND_HISTORY
-setopt SHARE_HISTORY
-# Ignore duplicates and erase any existing ones
-setopt HIST_IGNORE_DUPS       # Do not record an entry that was just recorded again.
-setopt HIST_IGNORE_ALL_DUPS   # Delete old recorded entry if new entry is a duplicate.
-setopt HIST_EXPIRE_DUPS_FIRST
+_hist_apply_settings
 
 # fc aliases
 h_func() {
@@ -81,7 +78,6 @@ alias h='h_func '
 
 # quick way to start custom zsh history that has all of current history to start
 hh_func() {
-
     usage() {
         cat <<EOF
 Replace current HISTFILE with one in current directory $(pwd)
@@ -94,13 +90,13 @@ EOF
     }
 
     # Default: do not auto-confirm
-    auto_confirm=false
+    local auto_confirm=false
 
     # Parse arguments
     if [[ $# -gt 1 ]]; then
         usage
+        return 1
     fi
-
     if [[ $# -eq 1 ]]; then
         case "$1" in
             -y|--yes)
@@ -108,85 +104,34 @@ EOF
                 ;;
             -h|--help)
                 usage
+                return 0
                 ;;
             *)
                 usage
+                return 1
                 ;;
         esac
     fi
 
-    if ! $auto_confirm; then
+    if ! ${auto_confirm}; then
         echo -n "Do you want to replace current HISTFILE with one in current directory? [y/N]: "
         read -r answer
         case "$answer" in
-            [yY][eE][sS]|[yY])
-                OLD_HISTFILE="${HISTFILE}"
-                HISTFILE="$(pwd)/.zsh_history"
-                if [[ ! -f "$(pwd)/.zsh_history" && "$(pwd)" != "${HOME}" ]]; then
-                    cat "${OLD_HISTFILE}" > "${HISTFILE}"
-                fi
-                HISTSIZE=10000000
-                SAVEHIST=10000000
-                setopt BANG_HIST                 # Treat the '!' character specially during expansion.
-                setopt EXTENDED_HISTORY          # Write the history file in the ":start:elapsed;command" format.
-                setopt INC_APPEND_HISTORY        # Write to the history file immediately, not when the shell exits.
-                setopt SHARE_HISTORY             # Share history between all sessions.
-                setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicate entries first when trimming history.
-                setopt HIST_IGNORE_DUPS          # Don't record an entry that was just recorded again.
-                setopt HIST_IGNORE_ALL_DUPS      # Delete old recorded entry if new entry is a duplicate.
-                setopt HIST_FIND_NO_DUPS         # Do not display a line previously found.
-                setopt HIST_IGNORE_SPACE         # Don't record an entry starting with a space.
-                setopt HIST_SAVE_NO_DUPS         # Don't write duplicate entries in the history file.
-                setopt HIST_REDUCE_BLANKS        # Remove superfluous blanks before recording entry.
-                setopt HIST_VERIFY               # Don't execute immediately upon history expansion.
-                setopt HIST_BEEP                 # Beep when accessing nonexistent history.
-                setopt APPEND_HISTORY
-                setopt INC_APPEND_HISTORY
-                setopt SHARE_HISTORY
-                # Ignore duplicates and erase any existing ones
-                setopt HIST_IGNORE_DUPS       # Do not record an entry that was just recorded again.
-                setopt HIST_IGNORE_ALL_DUPS   # Delete old recorded entry if new entry is a duplicate.
-                setopt HIST_EXPIRE_DUPS_FIRST
-
-                echo "Switched HISTFILE to ${HISTFILE} from ${OLD_HISTFILE}"
-                ;;
+            [yY][eE][sS]|[yY]) ;;
             *)
                 echo "Aborted."
+                return 1
                 ;;
         esac
-    else
-        OLD_HISTFILE="${HISTFILE}"
-        HISTFILE="$(pwd)/.zsh_history"
-        if [[ ! -f "$(pwd)/.zsh_history" && "$(pwd)" != "${HOME}" ]]; then
-            cat "${OLD_HISTFILE}" > "${HISTFILE}"
-        fi
-        HISTSIZE=10000000
-        SAVEHIST=10000000
-        setopt BANG_HIST                 # Treat the '!' character specially during expansion.
-        setopt EXTENDED_HISTORY          # Write the history file in the ":start:elapsed;command" format.
-        setopt INC_APPEND_HISTORY        # Write to the history file immediately, not when the shell exits.
-        setopt SHARE_HISTORY             # Share history between all sessions.
-        setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicate entries first when trimming history.
-        setopt HIST_IGNORE_DUPS          # Don't record an entry that was just recorded again.
-        setopt HIST_IGNORE_ALL_DUPS      # Delete old recorded entry if new entry is a duplicate.
-        setopt HIST_FIND_NO_DUPS         # Do not display a line previously found.
-        setopt HIST_IGNORE_SPACE         # Don't record an entry starting with a space.
-        setopt HIST_SAVE_NO_DUPS         # Don't write duplicate entries in the history file.
-        setopt HIST_REDUCE_BLANKS        # Remove superfluous blanks before recording entry.
-        setopt HIST_VERIFY               # Don't execute immediately upon history expansion.
-        setopt HIST_BEEP                 # Beep when accessing nonexistent history.
-        setopt APPEND_HISTORY
-        setopt INC_APPEND_HISTORY
-        setopt SHARE_HISTORY
-        # Ignore duplicates and erase any existing ones
-        setopt HIST_IGNORE_DUPS       # Do not record an entry that was just recorded again.
-        setopt HIST_IGNORE_ALL_DUPS   # Delete old recorded entry if new entry is a duplicate.
-        setopt HIST_EXPIRE_DUPS_FIRST
-
-        echo "Switched HISTFILE to ${HISTFILE} from ${OLD_HISTFILE}"
     fi
 
-
+    local OLD_HISTFILE="${HISTFILE}"
+    HISTFILE="$(pwd)/.zsh_history"
+    if [[ ! -f "${HISTFILE}" && "$(pwd)" != "${HOME}" ]]; then
+        cat "${OLD_HISTFILE}" > "${HISTFILE}"
+    fi
+    _hist_apply_settings
+    echo "Switched HISTFILE to ${HISTFILE} from ${OLD_HISTFILE}"
 }
 alias hh='hh_func '
 

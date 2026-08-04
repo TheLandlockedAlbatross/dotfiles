@@ -20,7 +20,8 @@ gitd () {
     fi
     modified_git_files=()
     head_files=()
-    readarray -t modified_git_files < <(git -C "${src}" status -s | awk '/^\s*M/ {print $2}' | xargs -I {} realpath "{}")
+    # (f) splits on newlines; unquoted assignment drops empty elements (zsh has no readarray)
+    modified_git_files=(${(f)"$(git -C "${src}" status -s | awk '/^\s*M/ {print $2}' | xargs -I {} realpath "{}")"})
     for modified_git_file in "${modified_git_files[@]}"; do
         # need to use paths relative to git repo
         modified_git_file_git_path=$(git ls-files --full-name "${modified_git_file}")
@@ -56,9 +57,9 @@ echo "Message: \${message}"
 rm "${GITD_COMMIT}"
 EOF
         fi
-        for i in $(eval echo "{0..$(( ${#head_files[@]} - 1 ))}"); do
+        for (( i = 1; i <= ${#head_files[@]}; i++ )); do
             # initial does not need tab
-            if [[ "${i}" -eq 0 ]]; then
+            if [[ "${i}" -eq 1 ]]; then
                 cat <<EOF > "${tmp_vimscript_file}"
 " Initial file 
 h jumpto-diff 

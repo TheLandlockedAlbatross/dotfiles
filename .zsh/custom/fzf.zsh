@@ -34,45 +34,50 @@ export FZF_DEFAULT_COMMAND='fd . --hidden'
 # alias functions
 # choose program to open result in
 fzf_run() {
-    local dir="${1:-.}"  # Default to current directory if no argument is given
-    if [[ ! -d "${dir}" ]]; then
-        dir="."
-    fi
-    if [[ $# > 1 ]]; then
+    # Usage: fzf_run [dir] [cmd...]
+    local dir="."
+    if [[ -d "${1}" ]]; then
+        dir="${1}"
         shift
     fi
-    local run="${@}" # Program to open result in, echo if no arg given
-    local res=$(fd . "${dir}" -uHL | fzf)
-    res=$(realpath "${res}")
+    local run="${*}" # Program to open result in, echo if no arg given
 
-    if [[ -n ${res} ]]; then
-        if [[ -z "${run}" ]]; then
-            # if no command, by default echo and copy to clipboard
-            printf "\"${res}\"" | xsel --clipboard --input
-            if [[ "$(xsel --clipboard --output)" == "${res}" ]]; then
+    # echo result and copy it to the clipboard (Wayland or X11)
+    _fzf_run_copy() {
+        if [[ -n "${WAYLAND_DISPLAY}" ]] && command -v wl-copy &> /dev/null; then
+            printf '%s' "${res}" | wl-copy
+            if [[ "$(wl-paste --no-newline 2> /dev/null)" == "${res}" ]]; then
                 echo "\"${res}\" (copied to clipboard)"
             else
-                echo "\"${res}\" (somehow failed to copy to clipboard, maybe no xsel?)"
+                echo "\"${res}\" (failed to copy to clipboard via wl-copy)"
             fi
-        elif [[ ! -n $(command -v ${run%% *}) ]]; then
-            echo "command \"${run%% *}\" not found"
-            # if bad command, by default echo and copy to clipboard
-            printf "\"${res}\"" | xsel --clipboard --input
+        elif [[ -n "${DISPLAY}" ]] && command -v xsel &> /dev/null; then
+            printf '%s' "${res}" | xsel --clipboard --input
             if [[ "$(xsel --clipboard --output)" == "${res}" ]]; then
                 echo "\"${res}\" (copied to clipboard)"
             else
-                echo "\"${res}\" (somehow failed to copy to clipboard, maybe no xsel?)"
+                echo "\"${res}\" (failed to copy to clipboard via xsel)"
             fi
         else
-            echo "${run} \"${res}\""
-            ${run} "${res}"
+            echo "\"${res}\" (not copied: need wl-clipboard on Wayland or xsel on X11)"
         fi
+    }
+
+    local res=$(fd . "${dir}" -uHL | fzf)
+    [[ -z "${res}" ]] && return
+    res=$(realpath "${res}")
+
+    if [[ -z "${run}" ]]; then
+        # if no command, by default echo and copy to clipboard
+        _fzf_run_copy
+    elif ! whence "${run%% *}" > /dev/null; then
+        echo "command \"${run%% *}\" not found"
+        # if bad command, by default echo and copy to clipboard
+        _fzf_run_copy
+    else
+        echo "${run} \"${res}\""
+        eval "${run} \"${res}\""
     fi
-}
-fzf_vim() {
-    local dir="${1:-.}"  # Default to current directory if no argument is given
-    vim $(fd . "${dir}" --hidden | fzf)
 }
 # aliases
 alias f='fzf_run '
-alias vf='fzf_vim '

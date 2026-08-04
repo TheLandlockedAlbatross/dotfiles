@@ -18,6 +18,10 @@
 #   ├── nitrogen-<OTHER>.cfg -> <NOTHING>
 #   └── ...
 swap_nitrogen_cfg() {
+    if ! command -v nitrogen &> /dev/null; then
+        echo "ERROR $0 - nitrogen not installed (X11 wallpaper tool; not applicable on Wayland)"
+        return 1
+    fi
     nitrogen_cfg_dir="${HOME}/.config/nitrogen"
     if [[ -d "${nitrogen_cfg_dir}" ]]; then
         if [[ -d "${1}" ]]; then
@@ -38,7 +42,7 @@ swap_nitrogen_cfg() {
                 cp "${1}/nitrogen.cfg" "${nitrogen_cfg_dir}/nitrogen.cfg"
                 nitrogen --restore
             else
-                echo "ERROR ${FUNCNAME} -  \"${1}\" is missing one of two required nitrogen .cfg files (bg-saved.cfg and nitrogen.cfg)"
+                echo "ERROR $0 -  \"${1}\" is missing one of two required nitrogen .cfg files (bg-saved.cfg and nitrogen.cfg)"
             fi
         else
             if [[ -z "${1}" ]]; then
@@ -54,7 +58,7 @@ swap_nitrogen_cfg() {
                     mv "${original_bg_saved_cfg_file}" "${nitrogen_cfg_dir}/bg-saved.cfg"
                     nitrogen --restore
                 else
-                    echo "ERROR ${FUNCNAME} -  No old cfg files to restore:"
+                    echo "ERROR $0 -  No old cfg files to restore:"
                     if [[ "$(command -v tree)" ]]; then
                         tree "${nitrogen_cfg_dir}"
                     else 
@@ -62,11 +66,11 @@ swap_nitrogen_cfg() {
                     fi
                 fi
             else
-                echo "ERROR ${FUNCNAME} -  No directory named \"${1}\""
+                echo "ERROR $0 -  No directory named \"${1}\""
             fi
         fi
     else
-        echo "ERROR ${FUNCNAME} -  Nitrogen cfg dir missing from "${nitrogen_cfg_dir}", is it installed?"
+        echo "ERROR $0 -  Nitrogen cfg dir missing from ${nitrogen_cfg_dir}, is it installed?"
     fi
 }
 alias nsw='swap_nitrogen_cfg '
