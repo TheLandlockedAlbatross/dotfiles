@@ -6,10 +6,11 @@
 # If not running interactively, don't do anything
 [[ "$-" != *i* ]] && return
 
-ZSH_THEME="powerlevel10k/powerlevel10k"
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-    source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
+# p10k tabled for now — uncomment this block (and the two others marked "p10k tabled") to restore
+#ZSH_THEME="powerlevel10k/powerlevel10k"
+#if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+#    source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+#fi
 
 export ZSH="${HOME}/.zsh"
 mkdir -p "${ZSH}"
@@ -22,13 +23,17 @@ mkdir -p "${ZSH}/plugins"
 if [[ ! -f ${ZSH}/plugins/marlonrichert/znap/znap.zsh ]]; then
     git clone --depth 1 -- https://github.com/marlonrichert/zsh-snap.git "${ZSH}/plugins/marlonrichert/znap"
 fi
+zstyle ':znap:*' repos-dir "${ZSH}/plugins"
 source "${ZSH}/plugins/marlonrichert/znap/znap.zsh"
 
-# powerlevel10k
-if [[ ! -d ${ZSH}/themes/powerlevel10k ]]; then
-    git clone --depth 1 -- https://github.com/romkatv/powerlevel10k.git "${ZSH}/themes/powerlevel10k/"
-fi
-source "${ZSH}/themes/powerlevel10k/powerlevel10k.zsh-theme"
+# powerlevel10k (p10k tabled for now)
+#if [[ ! -d ${ZSH}/themes/powerlevel10k ]]; then
+#    git clone --depth 1 -- https://github.com/romkatv/powerlevel10k.git "${ZSH}/themes/powerlevel10k/"
+#fi
+#source "${ZSH}/themes/powerlevel10k/powerlevel10k.zsh-theme"
+
+# Interim prompt while p10k is tabled
+eval "$(starship init zsh)"
 
 #znap source marlonrichert/zsh-autocomplete
 
@@ -119,8 +124,8 @@ fi
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
 
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh. (p10k tabled for now)
+#[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
