@@ -1,14 +1,36 @@
 #!/usr/bin/env python3
-"""Interactive monitor placement picker using GTK3 + GtkLayerShell + Cairo.
+"""Whole-layout monitor arrangement editor using GTK3 + GtkLayerShell + Cairo.
 
-Usage: monitor-picker.py <monitor-to-place>
-Outputs TWO hyprctl monitor config lines on Enter (current + new), exits 1 on
-Esc/cancel. On confirm, also rewrites ~/.config/hypr/monitors.conf to persist.
-All monitor data is queried live from wlr-randr (no hardcoded values).
+Usage: monitor-picker.py [monitor-to-preselect]
+
+Shows ALL active monitors at their true coordinates. Any monitor (or several)
+can be selected and moved — the layout is edited as a whole and applied once:
+
+  Select    : click a monitor, Tab cycles, 1-9/0 / Ctrl+Click toggle,
+              a = all/none, click empty space = clear
+  Move      : plain Arrow attaches the selected monitor to the nearest
+              monitor edge in that direction (any side, any arrangement);
+              Alt+Arrow nudges ±25 logical px, Shift+Arrow ±1.
+              Mouse drag moves freely with live edge snapping.
+  Per-mon   : s/S scale ±0.1, r/R cycle refresh rate (applies to selection)
+  Confirm   : Enter applies via hyprctl (caller) + persists monitors.conf;
+              blocked while monitors overlap. Esc cancels.
+  Extras    : e = edit raw commands, Ctrl+C = copy commands
+
+The focused monitor is highlighted green; each box shows in real time which
+workspace is active on that monitor (polled every second).
+
+If a monitor name is given and that monitor is currently disabled (the
+monitor-toggle.sh enable path), it is added at the right edge of the layout,
+pre-selected and ready to move.
+
+Outputs one hyprctl monitor config line per monitor on Enter, exits 1 on
+Esc/cancel. All monitor data is queried live from wlr-randr / hyprctl.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -18,12 +40,23 @@ import gi
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gdk, Gtk, GtkLayerShell
-
-POSITIONS = ["below", "right", "above", "left"]
-POS_MAP = {"Right": "right", "Left": "left", "Up": "below", "Down": "above"}
+from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
 MONITORS_CONF = os.path.expanduser("~/.config/hypr/monitors.conf")
+
+ARROW_DIRS = {"Left": "left", "Right": "right", "Up": "up", "Down": "down"}
+
+# wlr-randr transform name -> hyprland transform number
+TRANSFORMS = {
+    "normal": 0, "90": 1, "180": 2, "270": 3,
+    "flipped": 4, "flipped-90": 5, "flipped-180": 6, "flipped-270": 7,
+}
+
+SNAP_DRAW_PX = 16     # mouse-drag snap threshold in screen pixels
+NUDGE_COARSE = 25     # Alt+Arrow step (logical px)
+NUDGE_FINE = 1        # Shift+Arrow step (logical px)
+SCALE_STEP = 0.1      # s/S scale step
+BOX_GAP = 2           # draw-space inset so adjacent borders stay distinct
 
 # Strip lock-key noise (NumLock, CapsLock, ScrollLock) when testing modifiers
 _CLEAN_MASK = ~(
@@ -32,7 +65,7 @@ _CLEAN_MASK = ~(
     | Gdk.ModifierType.MOD3_MASK    # ScrollLock
 )
 
-# ── wlr-randr helpers ─────────────────────────────────────────────────
+# ── external queries ──────────────────────────────────────────────────
 
 def _query_wlr_randr():
     """Return parsed JSON from wlr-randr --json."""
@@ -42,14 +75,28 @@ def _query_wlr_randr():
     return json.loads(result.stdout)
 
 
-def _icon_for(name):
-    """Guess a display icon from the connector name."""
-    n = name.lower()
-    if n.startswith("edp"):
-        return "\U0001f4bb"   # laptop
-    if n.startswith("hdmi"):
-        return "\U0001f4fa"   # TV
-    return "\U0001f5b5"       # generic display
+def _query_hypr_monitors():
+    """Return hyprctl monitors -j parsed, or [] if hyprctl is unavailable."""
+    try:
+        result = subprocess.run(
+            ["hyprctl", "monitors", "-j"],
+            capture_output=True, text=True, check=True,
+        )
+        return json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return []
+
+
+def _query_hypr_workspaces():
+    """Return hyprctl workspaces -j parsed, or [] if hyprctl is unavailable."""
+    try:
+        result = subprocess.run(
+            ["hyprctl", "workspaces", "-j"],
+            capture_output=True, text=True, check=True,
+        )
+        return json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return []
 
 
 def _best_mode(monitor_entry):
@@ -67,8 +114,7 @@ def _best_mode(monitor_entry):
 def _build_mon_info(entry):
     """Build a monitor info dict from a wlr-randr JSON entry."""
     mode = _best_mode(entry)
-    pos = entry.get("position", {"x": 0, "y": 0})
-    phys = entry.get("physical_size", {})
+    pos = entry.get("position") or {"x": 0, "y": 0}
     w = mode["width"] if mode else 0
     h = mode["height"] if mode else 0
     rates = sorted({
@@ -81,174 +127,185 @@ def _build_mon_info(entry):
         "height": h,
         "rate": int(mode["refresh"]) if mode else 60,
         "rates": rates,
-        "scale": entry.get("scale", 1.0),
+        "scale": entry.get("scale", 1.0) or 1.0,
+        "transform": TRANSFORMS.get(str(entry.get("transform", "normal")), 0),
         "x": pos.get("x", 0),
         "y": pos.get("y", 0),
-        "phys_w": phys.get("width", 0),
-        "phys_h": phys.get("height", 0),
-        "icon": _icon_for(entry["name"]),
         "enabled": entry.get("enabled", False),
     }
 
 
-def get_all_monitors():
-    """Return list of monitor info dicts for every connected output."""
-    return [_build_mon_info(e) for e in _query_wlr_randr()]
-
-
-def get_active_monitor(exclude_name):
-    """Get the first active monitor that isn't *exclude_name*."""
-    for m in get_all_monitors():
-        if m["enabled"] and m["name"] != exclude_name:
-            return m
-    return None
-
-
-def get_monitor_by_name(name):
-    """Get a specific monitor by connector name."""
-    for m in get_all_monitors():
-        if m["name"] == name:
-            return m
-    return None
-
 # ── geometry helpers ──────────────────────────────────────────────────
 
 def logical_size(mon):
-    """Logical pixel dimensions (res / scale), truncated to integers like Hyprland."""
+    """Logical pixel dimensions (res / scale), transform-aware."""
     s = mon["scale"]
-    return int(mon["width"] / s), int(mon["height"] / s)
+    w, h = int(mon["width"] / s), int(mon["height"] / s)
+    if mon.get("transform", 0) in (1, 3, 5, 7):  # 90 / 270 rotations
+        w, h = h, w
+    return w, h
 
 
-def monitors_overlap(current, new_x, new_y, new_mon):
-    """Check whether two monitor rectangles share any pixel."""
-    aw, ah = logical_size(current)
-    ax, ay = current["x"], current["y"]
-    bw, bh = logical_size(new_mon)
-    bx, by = new_x, new_y
+def rects_overlap(ax, ay, aw, ah, bx, by, bw, bh):
+    """Whether two rectangles share any pixel."""
     return bx < ax + aw and bx + bw > ax and by < ay + ah and by + bh > ay
 
 
-def calc_hypr_position(position, current, new, offset=0):
-    """Calculate Hyprland position coordinates for the new monitor.
+def mon_rect(mon):
+    return (mon["x"], mon["y"], *logical_size(mon))
 
-    *offset* shifts the new monitor on the perpendicular axis (logical px).
-    For left/right positions it shifts vertically; for above/below horizontally.
+
+def any_overlap(mons):
+    """Whether any pair of monitors overlaps."""
+    for i, a in enumerate(mons):
+        for b in mons[i + 1:]:
+            if rects_overlap(*mon_rect(a), *mon_rect(b)):
+                return True
+    return False
+
+
+def normalized_positions(mons):
+    """Return {name: (x, y)} translated so the layout starts at 0,0."""
+    if not mons:
+        return {}
+    min_x = min(m["x"] for m in mons)
+    min_y = min(m["y"] for m in mons)
+    return {m["name"]: (m["x"] - min_x, m["y"] - min_y) for m in mons}
+
+
+def attach_candidates(mon, others, direction):
+    """Positions attaching *mon* to any side of any monitor in *others*.
+
+    Returns (x, y) tuples where mon touches another monitor's edge facing
+    *direction*, with sensible perpendicular alignments: keep the current
+    position when it already lines up with that neighbor's span, plus
+    edge-aligned both ways and centered. Overlapping or non-directional
+    candidates are filtered by the caller.
     """
-    cw, ch = logical_size(current)
-    nw, nh = logical_size(new)
-    cx, cy = current["x"], current["y"]
-    if position == "right":
-        return int(cx + cw), int(cy + offset)
-    elif position == "left":
-        return int(cx - nw), int(cy + offset)
-    elif position == "below":
-        return int(cx + offset), int(cy + ch)
-    elif position == "above":
-        return int(cx + offset), int(cy - nh)
+    mw, mh = logical_size(mon)
+    cands = set()
+    for o in others:
+        ow, oh = logical_size(o)
+        if direction in ("left", "right"):
+            x = o["x"] + ow if direction == "right" else o["x"] - mw
+            ys = {
+                o["y"],                      # top edges aligned
+                o["y"] + oh - mh,            # bottom edges aligned
+                o["y"] + (oh - mh) // 2,     # centered
+            }
+            if mon["y"] < o["y"] + oh and mon["y"] + mh > o["y"]:
+                ys.add(mon["y"])             # keep y — already lined up
+            cands.update((x, y) for y in ys)
+        else:
+            y = o["y"] + oh if direction == "down" else o["y"] - mh
+            xs = {
+                o["x"],                      # left edges aligned
+                o["x"] + ow - mw,            # right edges aligned
+                o["x"] + (ow - mw) // 2,     # centered
+            }
+            if mon["x"] < o["x"] + ow and mon["x"] + mw > o["x"]:
+                xs.add(mon["x"])             # keep x — already lined up
+            cands.update((x, y) for x in xs)
+    return cands
 
 
-def _format_scale(scale_tenths):
-    """Format an integer-tenths scale value for Hyprland config.
+def attach_move(mon, others, direction):
+    """Next non-overlapping attach position for *mon* in *direction*.
 
-    20 → '2', 24 → '2.4', 15 → '1.5'
+    Returns (x, y) or None if there is nowhere further in that direction.
     """
-    if scale_tenths % 10 == 0:
-        return str(scale_tenths // 10)
-    return f"{scale_tenths / 10:.1f}"
+    mw, mh = logical_size(mon)
+    best = None
+    best_key = None
+    for x, y in attach_candidates(mon, others, direction):
+        if direction == "right":
+            travel, perp = x - mon["x"], abs(y - mon["y"])
+        elif direction == "left":
+            travel, perp = mon["x"] - x, abs(y - mon["y"])
+        elif direction == "down":
+            travel, perp = y - mon["y"], abs(x - mon["x"])
+        else:
+            travel, perp = mon["y"] - y, abs(x - mon["x"])
+        if travel <= 0:
+            continue
+        if any(rects_overlap(x, y, mw, mh, *mon_rect(o)) for o in others):
+            continue
+        key = (travel, perp)
+        if best_key is None or key < best_key:
+            best, best_key = (x, y), key
+    return best
 
 
-def _mon_config_str(mon, x=None, y=None, scale_tenths=None):
-    """Build a Hyprland monitor config string for a monitor dict."""
-    mx = x if x is not None else mon["x"]
-    my = y if y is not None else mon["y"]
-    st = scale_tenths if scale_tenths is not None else _scale_tenths_from(mon)
-    return f"{mon['name']}, {mon['width']}x{mon['height']}@{mon['rate']}, {mx}x{my}, {_format_scale(st)}"
+def drag_snap_delta(moving, others, s):
+    """Snap adjustment (dx, dy) in logical px for a mouse drag.
 
-
-# ── arithmetic expression helpers ────────────────────────────────────
-
-def _scale_div_expr(value, scale_tenths):
-    """Bash $(( )) expression for value / scale using integer-tenths.
-
-    Avoids floating point by scaling up by 10:
-      scale_tenths=20  (scale 2):    '2560 / 2'
-      scale_tenths=21  (scale 2.1):  '2560 * 10 / 21'
-      scale_tenths=24  (scale 2.4):  '3840 * 10 / 24'
+    Aligns edges of the *moving* monitors to edges of *others* when within
+    SNAP_DRAW_PX screen pixels (converted via draw scale *s*).
     """
-    if scale_tenths % 10 == 0:
-        return f"{value} / {scale_tenths // 10}"
-    return f"{value} * 10 / {scale_tenths}"
+    if not others or s <= 0:
+        return 0, 0
+    threshold = SNAP_DRAW_PX / s
+    best_dx = best_dy = None
+    for m in moving:
+        mx, my, mw, mh = mon_rect(m)
+        for o in others:
+            ox, oy, ow, oh = mon_rect(o)
+            for d in (ox - (mx + mw), (ox + ow) - mx,   # adjacency
+                      ox - mx, (ox + ow) - (mx + mw)):  # edge alignment
+                if abs(d) <= threshold and (best_dx is None or abs(d) < abs(best_dx)):
+                    best_dx = d
+            for d in (oy - (my + mh), (oy + oh) - my,
+                      oy - my, (oy + oh) - (my + mh)):
+                if abs(d) <= threshold and (best_dy is None or abs(d) < abs(best_dy)):
+                    best_dy = d
+    return best_dx or 0, best_dy or 0
 
 
-def _scale_tenths_from(mon):
-    """Convert a monitor's scale float to integer tenths."""
-    return round(mon["scale"] * 10)
+# ── config strings & persistence ─────────────────────────────────────
+
+def format_scale(scale):
+    """Format a scale float for Hyprland config, preserving values like 1.25.
+
+    1.0 -> '1', 1.5 -> '1.5', 1.25 -> '1.25' (float noise rounded away).
+    """
+    return f"{round(scale + 1e-9, 2):g}"
 
 
-def _build_pos_exprs(position, current, new, offset=0, new_scale_tenths=None):
-    """Return (x_expr, y_expr) as bash $(( )) strings showing the math."""
-    cx, cy = current["x"], current["y"]
-    cw, ch = current["width"], current["height"]
-    cs = _scale_tenths_from(current)
-    nw, nh = new["width"], new["height"]
-    ns = new_scale_tenths if new_scale_tenths is not None else _scale_tenths_from(new)
-
-    def _add(base, extra_expr):
-        if base == 0:
-            return extra_expr
-        return f"{base} + ({extra_expr})"
-
-    def _sub(base, extra_expr):
-        if base == 0:
-            return f"0 - ({extra_expr})"
-        return f"{base} - ({extra_expr})"
-
-    def _with_offset(val, off):
-        if off == 0:
-            return str(val)
-        if off > 0:
-            return f"{val} + {off}"
-        return f"{val} - {abs(off)}"
-
-    if position == "right":
-        x = f"$(({_add(cx, _scale_div_expr(cw, cs))}))"
-        y = f"$(({_with_offset(cy, offset)}))"
-    elif position == "left":
-        x = f"$(({_sub(cx, _scale_div_expr(nw, ns))}))"
-        y = f"$(({_with_offset(cy, offset)}))"
-    elif position == "below":
-        x = f"$(({_with_offset(cx, offset)}))"
-        y = f"$(({_add(cy, _scale_div_expr(ch, cs))}))"
-    elif position == "above":
-        x = f"$(({_with_offset(cx, offset)}))"
-        y = f"$(({_sub(cy, _scale_div_expr(nh, ns))}))"
-    return x, y
+def mon_config_str(mon, x, y):
+    """Build a Hyprland monitor config string at position x,y."""
+    cfg = (
+        f"{mon['name']}, {mon['width']}x{mon['height']}@{mon['rate']}, "
+        f"{x}x{y}, {format_scale(mon['scale'])}"
+    )
+    if mon.get("transform", 0):
+        cfg += f", transform, {mon['transform']}"
+    return cfg
 
 
-# ── monitors.conf persistence ────────────────────────────────────────
+def _monitor_line_name(line):
+    """Monitor name from a 'monitor = NAME, ...' config line, else None."""
+    s = line.strip()
+    if not s.startswith("monitor") or "=" not in s:
+        return None
+    return s.split("=", 1)[1].split(",")[0].strip()
+
 
 def rewrite_monitors_conf(configs):
     """Rewrite monitors.conf with updated monitor lines.
 
-    *configs* is a dict mapping monitor name → config string.
-    Lines matching those names are replaced; unmatched configs are appended.
-    All other lines (comments, env, unrelated monitors) are preserved.
+    *configs* is a dict mapping monitor name -> config string. Lines matching
+    those names are replaced; unmatched configs are appended. All other lines
+    (comments, workspace rules, the fallback rule) are preserved.
     """
     remaining = dict(configs)
     lines = []
     if os.path.exists(MONITORS_CONF):
         with open(MONITORS_CONF) as f:
             for line in f:
-                stripped = line.strip()
-                replaced = False
-                if stripped.startswith("monitor"):
-                    for name, cfg in list(remaining.items()):
-                        if f"= {name}" in stripped or f"= {name}," in stripped:
-                            lines.append(f"monitor = {cfg}\n")
-                            del remaining[name]
-                            replaced = True
-                            break
-                if not replaced:
+                name = _monitor_line_name(line)
+                if name in remaining:
+                    lines.append(f"monitor = {remaining.pop(name)}\n")
+                else:
                     lines.append(line)
     for cfg in remaining.values():
         lines.append(f"monitor = {cfg}\n")
@@ -256,29 +313,28 @@ def rewrite_monitors_conf(configs):
         f.writelines(lines)
 
 
-# ── GTK picker ────────────────────────────────────────────────────────
+# ── GTK layout editor ─────────────────────────────────────────────────
 
-class MonitorPicker(Gtk.Window):
-    def __init__(self, current, new_mon):
-        super().__init__(title="Monitor Picker")
+class LayoutEditor(Gtk.Window):
+    def __init__(self, mons, preselect=None):
+        super().__init__(title="Monitor Layout")
         self.set_app_paintable(True)
         self.set_name("omarchy.monitor-picker")
 
-        # State
-        self.current = current
-        self.new_mon = new_mon
-        self.pos_index = 1  # start at "right"
-        self.offset = 0     # perpendicular offset in logical pixels
-        self.new_scale_tenths = _scale_tenths_from(new_mon)  # integer: scale * 10
-        self.orig_scale_tenths = self.new_scale_tenths
-        self.new_rates = list(new_mon.get("rates") or [new_mon["rate"]])
-        try:
-            self.rate_index = self.new_rates.index(new_mon["rate"])
-        except ValueError:
-            self.rate_index = len(self.new_rates) - 1
+        # State — mons are mutable dicts; x/y edited in place
+        self.mons = mons
+        self.selected = set()
+        if preselect and any(m["name"] == preselect for m in mons):
+            self.selected = {preselect}
+        self.focused_name = None
+        self.ws_active = {}    # monitor name -> active workspace id
+        self.ws_resident = {}  # monitor name -> sorted list of workspace ids
         self.edit_mode = False
         self.cmd_edited = False
-        self.result = None   # will hold tuple of config strings on confirm
+        self.result = None     # tuple of config strings on confirm
+        self._xform = None     # (s, ox, oy, min_x, min_y) from last draw
+        self._drag = None      # (start_px, start_py, {name: (x, y)})
+        self._poll_state()
 
         # Layer shell setup
         GtkLayerShell.init_for_window(self)
@@ -301,10 +357,17 @@ class MonitorPicker(Gtk.Window):
         overlay = Gtk.Overlay()
         self.add(overlay)
 
-        # Drawing area (base layer — draws everything except the command)
         self.darea = Gtk.DrawingArea()
         self.darea.set_can_focus(True)
         self.darea.connect("draw", self.on_draw)
+        self.darea.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+        )
+        self.darea.connect("button-press-event", self.on_button_press)
+        self.darea.connect("button-release-event", self.on_button_release)
+        self.darea.connect("motion-notify-event", self.on_motion)
         overlay.add(self.darea)
 
         # Command area — Gtk.TextView for multiline select + copy on Wayland
@@ -350,23 +413,71 @@ class MonitorPicker(Gtk.Window):
         self.darea.connect("key-press-event", self.on_key)
         self.connect("destroy", Gtk.main_quit)
 
+        # Live workspace/focus refresh
+        self._poll_id = GLib.timeout_add(1000, self._on_poll)
+
         self.show_all()
         self.darea.grab_focus()
         self._update_cmd()
 
-    @property
-    def position(self):
-        return POSITIONS[self.pos_index]
+    # ── live state polling ────────────────────────────────────────────
 
-    # ── Key handling ──────────────────────────────────────────────────
+    def _poll_state(self):
+        """Refresh focused monitor + workspace residency from hyprctl.
+
+        Rebuilds the maps from scratch so unplugged monitors don't linger;
+        keeps the previous data if hyprctl momentarily returns nothing.
+        """
+        monitors = _query_hypr_monitors()
+        if monitors:
+            active = {}
+            for hm in monitors:
+                if hm.get("focused"):
+                    self.focused_name = hm.get("name")
+                active[hm.get("name")] = (hm.get("activeWorkspace") or {}).get("id")
+            self.ws_active = active
+        workspaces = _query_hypr_workspaces()
+        if workspaces:
+            resident = {}
+            for ws in workspaces:
+                wid = ws.get("id")
+                if wid is None or wid < 0:  # skip special workspaces
+                    continue
+                resident.setdefault(ws.get("monitor"), []).append(wid)
+            self.ws_resident = {k: sorted(v) for k, v in resident.items()}
+
+    def _on_poll(self):
+        before = (self.focused_name, dict(self.ws_active), dict(self.ws_resident))
+        self._poll_state()
+        if before != (self.focused_name, self.ws_active, self.ws_resident):
+            self.darea.queue_draw()
+        return True  # keep polling
+
+    # ── selection helpers ─────────────────────────────────────────────
+
+    def _selected_mons(self):
+        return [m for m in self.mons if m["name"] in self.selected]
+
+    def _unselected_mons(self):
+        return [m for m in self.mons if m["name"] not in self.selected]
+
+    def _select_next(self):
+        names = [m["name"] for m in self.mons]
+        if not names:
+            return
+        if len(self.selected) == 1:
+            idx = (names.index(next(iter(self.selected))) + 1) % len(names)
+        else:
+            idx = 0
+        self.selected = {names[idx]}
+
+    # ── key handling ──────────────────────────────────────────────────
 
     def _on_textview_key(self, widget, event):
         """Intercept keys on the command textview; let copy/select-all through."""
         key = Gdk.keyval_name(event.keyval)
         ctrl = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.SHIFT_MASK)
-        # In edit mode, Esc exits edit mode; Ctrl+Enter confirms;
-        # everything else goes to the textview for normal typing.
         if self.edit_mode:
             if key == "Escape":
                 self._exit_edit_mode()
@@ -374,15 +485,10 @@ class MonitorPicker(Gtk.Window):
             if ctrl and key in ("Return", "KP_Enter"):
                 return self.on_key(widget, event)
             return False
-        # Let the textview handle Ctrl+C, Ctrl+A, and Shift+Arrow for selection
-        # (but NOT Shift+Arrow when it's a fine-tune key — forward those to on_key)
         if ctrl and key in ("c", "C", "a", "A"):
             return False
         if shift and key in ("Left", "Right", "Up", "Down"):
-            # Shift+Arrow is fine-tune ±1; forward to on_key, not the textview
             return self.on_key(widget, event)
-        if shift and key in ("Home", "End"):
-            return False
         if key in ("Home", "End"):
             return False
         return self.on_key(widget, event)
@@ -399,34 +505,15 @@ class MonitorPicker(Gtk.Window):
             return True
 
         # In edit mode, let the textview handle everything except Ctrl+Enter
-        # (confirm) — including arrows, Home/End, typing, selection.
         if self.edit_mode and widget is not self.cmd_view:
-            if ctrl and key in ("Return", "KP_Enter"):
-                pass  # fall through to confirm handling below
-            else:
+            if not (ctrl and key in ("Return", "KP_Enter")):
                 return False
 
         if key in ("Return", "KP_Enter"):
-            if self.cmd_edited:
-                configs = self._parse_edited_cmd()
-                if not configs:
-                    return True  # unparseable — ignore Enter
-                self.result = tuple(configs)
-                rewrite_monitors_conf({c.split(",", 1)[0].strip(): c for c in configs})
-            else:
-                cur_cfg = _mon_config_str(self.current)
-                new_cfg = self._new_config_str()
-                self.result = (cur_cfg, new_cfg)
-                rewrite_monitors_conf({
-                    self.current["name"]: cur_cfg,
-                    self.new_mon["name"]: new_cfg,
-                })
-            Gtk.main_quit()
-            return True
+            return self._confirm()
 
-        # Ctrl+C from anywhere: copy command to Wayland clipboard via wl-copy
+        # Ctrl+C from anywhere: copy commands to Wayland clipboard via wl-copy
         if ctrl and key in ("c", "C"):
-            # Join lines with && for a runnable one-liner
             cmd = " && ".join(self._build_display_cmd().splitlines())
             try:
                 subprocess.Popen(
@@ -437,59 +524,78 @@ class MonitorPicker(Gtk.Window):
                 pass
             return True
 
-        # Arrow keys — check key first, THEN test modifier.
-        # Three tiers: plain=position, Alt=±25 with snap, Shift=±1 no snap
-        if key in POS_MAP:
+        # Arrows — plain: attach-move; Alt: ±25 nudge; Shift: ±1 nudge
+        if key in ARROW_DIRS:
+            direction = ARROW_DIRS[key]
             alt = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.MOD1_MASK)
             shift = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.SHIFT_MASK)
+            sel = self._selected_mons()
+            if not sel:
+                return True
             if alt or shift:
-                pos = self.position
-                step = 1 if shift else 25
-                is_offset_key = (
-                    (pos in ("right", "left") and key in ("Up", "Down"))
-                    or (pos in ("above", "below") and key in ("Left", "Right"))
-                )
-                if is_offset_key:
-                    positive = key in ("Down", "Right")
-                    delta = step if positive else -step
-                    new_offset = self.offset + delta
-                    if not shift:  # snap only for Alt+Arrow (±25), not Shift (±1)
-                        new_offset = self._snap_offset(self.offset, new_offset, delta > 0)
-                    self.offset = new_offset
+                step = NUDGE_FINE if shift else NUDGE_COARSE
+                dx = {"left": -step, "right": step}.get(direction, 0)
+                dy = {"up": -step, "down": step}.get(direction, 0)
+                for m in sel:
+                    m["x"] += dx
+                    m["y"] += dy
+            elif len(sel) == 1:
+                dest = attach_move(sel[0], self._unselected_mons(), direction)
+                if dest:
+                    sel[0]["x"], sel[0]["y"] = dest
             else:
-                self.pos_index = POSITIONS.index(POS_MAP[key])
-                self.offset = 0
-            self._sync_scale()
-            self.darea.queue_draw()
-            self._update_cmd()
+                # group attach is ambiguous — move the group coarsely instead
+                dx = {"left": -NUDGE_COARSE, "right": NUDGE_COARSE}.get(direction, 0)
+                dy = {"up": -NUDGE_COARSE, "down": NUDGE_COARSE}.get(direction, 0)
+                for m in sel:
+                    m["x"] += dx
+                    m["y"] += dy
+            self._layout_changed()
             return True
 
-        # s / S — adjust scale of the new monitor by ±0.1
-        if key == "s":
-            self.new_scale_tenths = min(50, self.new_scale_tenths + 1)
-            self._sync_scale()
+        # Tab — cycle single selection
+        if key in ("Tab", "ISO_Left_Tab"):
+            self._select_next()
             self.darea.queue_draw()
-            self._update_cmd()
-            return True
-        if key == "S":
-            self.new_scale_tenths = max(5, self.new_scale_tenths - 1)
-            self._sync_scale()
-            self.darea.queue_draw()
-            self._update_cmd()
             return True
 
-        # r / R — cycle available refresh rates for the new monitor
-        if key == "r" and self.new_rates:
-            self.rate_index = min(len(self.new_rates) - 1, self.rate_index + 1)
-            self.new_mon["rate"] = self.new_rates[self.rate_index]
-            self.darea.queue_draw()
-            self._update_cmd()
+        # 1-9, 0 — toggle selection of monitor by displayed index (0 = 10th)
+        if key.isdigit():
+            idx = 9 if key == "0" else int(key) - 1
+            if idx < len(self.mons):
+                name = self.mons[idx]["name"]
+                self.selected.symmetric_difference_update({name})
+                self.darea.queue_draw()
             return True
-        if key == "R" and self.new_rates:
-            self.rate_index = max(0, self.rate_index - 1)
-            self.new_mon["rate"] = self.new_rates[self.rate_index]
+
+        # a — select all / clear
+        if key == "a":
+            if len(self.selected) == len(self.mons):
+                self.selected = set()
+            else:
+                self.selected = {m["name"] for m in self.mons}
             self.darea.queue_draw()
-            self._update_cmd()
+            return True
+
+        # s / S — adjust scale of selected monitors by ±SCALE_STEP
+        if key in ("s", "S"):
+            delta = SCALE_STEP if key == "s" else -SCALE_STEP
+            for m in self._selected_mons():
+                m["scale"] = max(0.5, min(5.0, round(m["scale"] + delta, 2)))
+            self._layout_changed()
+            return True
+
+        # r / R — cycle available refresh rates of selected monitors
+        if key in ("r", "R"):
+            step = 1 if key == "r" else -1
+            for m in self._selected_mons():
+                rates = m.get("rates") or [m["rate"]]
+                try:
+                    i = rates.index(m["rate"])
+                except ValueError:
+                    i = len(rates) - 1
+                m["rate"] = rates[max(0, min(len(rates) - 1, i + step))]
+            self._layout_changed()
             return True
 
         # e — enter edit mode (direct text editing of the setup commands)
@@ -499,24 +605,99 @@ class MonitorPicker(Gtk.Window):
 
         return False
 
-    # ── Edit mode ─────────────────────────────────────────────────────
+    def _confirm(self):
+        if self.cmd_edited:
+            configs = self._parse_edited_cmd()
+            if not configs:
+                return True  # unparseable — ignore Enter
+        else:
+            if any_overlap(self.mons):
+                return True  # overlap warning is on screen; refuse to apply
+            norm = normalized_positions(self.mons)
+            configs = [mon_config_str(m, *norm[m["name"]]) for m in self.mons]
+        self.result = tuple(configs)
+        rewrite_monitors_conf({c.split(",", 1)[0].strip(): c for c in configs})
+        Gtk.main_quit()
+        return True
+
+    def _layout_changed(self):
+        self.darea.queue_draw()
+        self._update_cmd()
+
+    # ── mouse handling ────────────────────────────────────────────────
+
+    def _mon_at(self, px, py):
+        """Monitor under screen point (px, py), or None."""
+        if not self._xform:
+            return None
+        s, ox, oy, min_x, min_y = self._xform
+        lx = (px - ox) / s + min_x
+        ly = (py - oy) / s + min_y
+        for m in reversed(self.mons):  # later-drawn (selected) on top
+            x, y, w, h = mon_rect(m)
+            if x <= lx < x + w and y <= ly < y + h:
+                return m
+        return None
+
+    def on_button_press(self, widget, event):
+        if event.button != 1 or self.edit_mode:
+            return False
+        self.darea.grab_focus()
+        mon = self._mon_at(event.x, event.y)
+        ctrl = bool(event.state & _CLEAN_MASK & Gdk.ModifierType.CONTROL_MASK)
+        if mon is None:
+            self.selected = set()
+            self.darea.queue_draw()
+            return True
+        if ctrl:
+            self.selected.symmetric_difference_update({mon["name"]})
+        elif mon["name"] not in self.selected:
+            self.selected = {mon["name"]}
+        if mon["name"] in self.selected:
+            self._drag = (
+                event.x, event.y,
+                {m["name"]: (m["x"], m["y"]) for m in self._selected_mons()},
+            )
+        self.darea.queue_draw()
+        return True
+
+    def on_motion(self, widget, event):
+        if not self._drag or not self._xform:
+            return False
+        s = self._xform[0]
+        sx, sy, orig = self._drag
+        dx = (event.x - sx) / s
+        dy = (event.y - sy) / s
+        # Only monitors that were selected when the drag started have an
+        # origin — selection can change mid-drag via keyboard.
+        moving = [m for m in self._selected_mons() if m["name"] in orig]
+        if not moving:
+            return True
+        for m in moving:
+            ox_, oy_ = orig[m["name"]]
+            m["x"] = round(ox_ + dx)
+            m["y"] = round(oy_ + dy)
+        snap_dx, snap_dy = drag_snap_delta(moving, self._unselected_mons(), s)
+        for m in moving:
+            m["x"] += snap_dx
+            m["y"] += snap_dy
+        self._layout_changed()
+        return True
+
+    def on_button_release(self, widget, event):
+        if event.button == 1 and self._drag:
+            self._drag = None
+            self._layout_changed()
+            return True
+        return False
+
+    # ── edit mode ─────────────────────────────────────────────────────
 
     def _enter_edit_mode(self):
-        """Enable direct editing of the command textview.
-
-        Replaces the $(( )) display commands with evaluated numeric commands
-        so the user edits concrete values. Position/scale keys become inert
-        until Esc exits edit mode.
-        """
+        """Enable direct editing of the command textview."""
         self.edit_mode = True
-        cur_cfg = _mon_config_str(self.current)
-        new_cfg = self._new_config_str()
-        text = (
-            f'hyprctl keyword monitor "{cur_cfg}"\n'
-            f'hyprctl keyword monitor "{new_cfg}"'
-        )
         buf = self.cmd_view.get_buffer()
-        buf.set_text(text)
+        buf.set_text(self._build_display_cmd())
         self.cmd_view.set_editable(True)
         self.cmd_view.set_cursor_visible(True)
         self.cmd_prefix_label.set_text(
@@ -532,107 +713,225 @@ class MonitorPicker(Gtk.Window):
         self.cmd_view.set_editable(False)
         self.cmd_view.set_cursor_visible(False)
         self.cmd_prefix_label.set_text(
-            "Setup commands (edited — Enter to apply, any arrow/s/S/r/R to regenerate):"
+            "Setup commands (edited — Enter to apply, any layout key to regenerate):"
         )
         self.darea.grab_focus()
 
     def _parse_edited_cmd(self):
         """Extract quoted monitor config strings from the edited textview."""
-        import re
         buf = self.cmd_view.get_buffer()
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         configs = []
         for line in text.splitlines():
-            m = re.search(
-                r'hyprctl\s+keyword\s+monitor\s+"([^"]+)"', line.strip()
-            )
+            m = re.search(r'hyprctl\s+keyword\s+monitor\s+"([^"]+)"', line.strip())
             if m:
                 configs.append(m.group(1))
         return configs
 
-    def _sync_scale(self):
-        """Keep new_mon['scale'] in sync with new_scale_tenths for geometry calcs."""
-        self.new_mon["scale"] = self.new_scale_tenths / 10.0
+    # ── command display ───────────────────────────────────────────────
 
-    # ── Snap alignment helpers ────────────────────────────────────────
+    def _build_display_cmd(self):
+        """Shell commands applying the whole (normalized) layout."""
+        norm = normalized_positions(self.mons)
+        return "\n".join(
+            f'hyprctl keyword monitor "{mon_config_str(m, *norm[m["name"]])}"'
+            for m in self.mons
+        )
 
-    def _snap_offsets(self):
-        """Return sorted offsets where monitor edges visually coincide.
+    def _update_cmd(self):
+        """Refresh the command textview text and color."""
+        if self.edit_mode:
+            return
+        if self.cmd_edited:
+            self.cmd_edited = False
+            self.cmd_prefix_label.set_text("Setup commands (to be run) — e: edit:")
+        color = "#ff5a4d" if any_overlap(self.mons) else "#66e6a0"
+        self.cmd_css.load_from_data(
+            f"textview, textview text {{ color: {color}; font-family: monospace;"
+            f"  font-size: 12px; background: transparent; caret-color: #ffcc33; }}"
+            f"textview text selection {{ background-color: #3388cc; color: white; }}"
+            .encode()
+        )
+        self.cmd_view.get_buffer().set_text(self._build_display_cmd())
 
-        The visual layout centers both boxes, so logical alignment (offset=0)
-        does NOT produce visually aligned edges when monitors differ in size.
-        These snap points compensate for the centering offset so edges actually
-        line up on screen.
-        """
-        ch_nat = self.current["height"]
-        nh_nat = self.new_mon["height"]
-        cw_nat = self.current["width"]
-        nw_nat = self.new_mon["width"]
-        cs = self.current["scale"]
-        pos = self.position
-        if pos in ("right", "left"):
-            points = {
-                round((nh_nat - ch_nat) / (2 * cs)),    # top-top
-                round((ch_nat - nh_nat) / (2 * cs)),    # bottom-bottom
-                round((nh_nat + ch_nat) / (2 * cs)),    # cur-bottom = new-top
-                round(-(nh_nat + ch_nat) / (2 * cs)),   # cur-top = new-bottom
-            }
+    # ── drawing ───────────────────────────────────────────────────────
+
+    def on_draw(self, widget, cr):
+        alloc = widget.get_allocation()
+        sw, sh = alloc.width, alloc.height
+
+        # Background
+        cr.set_source_rgba(0.05, 0.05, 0.1, 0.88)
+        cr.rectangle(0, 0, sw, sh)
+        cr.fill()
+
+        if not self.mons:
+            return
+
+        # True-coordinate layout scaled to fit
+        rects = [mon_rect(m) for m in self.mons]
+        min_x = min(r[0] for r in rects)
+        min_y = min(r[1] for r in rects)
+        span_w = max(max(r[0] + r[2] for r in rects) - min_x, 1)
+        span_h = max(max(r[1] + r[3] for r in rects) - min_y, 1)
+        s = min(sw * 0.62 / span_w, sh * 0.48 / span_h)
+        ox = (sw - span_w * s) / 2
+        oy = (sh * 0.80 - span_h * s) / 2  # keep clear of the bottom info area
+        self._xform = (s, ox, oy, min_x, min_y)
+
+        def draw_box(x, y, w, h):
+            return (ox + (x - min_x) * s + BOX_GAP, oy + (y - min_y) * s + BOX_GAP,
+                    w * s - 2 * BOX_GAP, h * s - 2 * BOX_GAP)
+
+        # Unselected first, selected on top
+        ordered = self._unselected_mons() + self._selected_mons()
+        for m in ordered:
+            self._draw_monitor_box(cr, *draw_box(*mon_rect(m)), m)
+
+        # Alignment guide lines between selected and unselected monitors
+        for m in self._selected_mons():
+            for o in self._unselected_mons():
+                self._draw_snap_lines(cr, draw_box(*mon_rect(o)), draw_box(*mon_rect(m)))
+
+        # --- Bottom info area (drawn upward from bottom) ---
+        cr.select_font_face("Sans", 0, 0)
+        bottom_y = sh - 30
+
+        # Row 1 (lowest): hint bar
+        hint = ("Click/drag: select+move  ·  Ctrl+Click / 1-9/0: multi-select  ·  Tab: next  ·  a: all/none"
+                "  ·  Arrows: attach  ·  Alt/Shift+Arrow: nudge ±25/±1  ·  s/S: scale  ·  r/R: rate"
+                "  ·  e: edit cmd  ·  Ctrl+C: copy  ·  Enter: apply  ·  Esc: cancel")
+        cr.set_source_rgba(1, 1, 1, 0.45)
+        cr.set_font_size(14)
+        te = cr.text_extents(hint)
+        cr.move_to((sw - te.width) / 2, bottom_y)
+        cr.show_text(hint)
+
+        # Row 2: command textview (GTK widget) — skip past it
+        bottom_y = sh - 120 - 14 * max(0, len(self.mons) - 2)
+
+        # Row 3: overlap warning
+        if any_overlap(self.mons):
+            warn = "Monitors overlap — Enter disabled until resolved"
+            cr.set_source_rgba(1.0, 0.35, 0.3, 0.9)
+            cr.set_font_size(17)
+            te = cr.text_extents(warn)
+            cr.move_to((sw - te.width) / 2, bottom_y)
+            cr.show_text(warn)
+            bottom_y -= 28
+
+        # Row 4 (topmost): selection summary
+        sel = ", ".join(sorted(self.selected)) or "none — click a monitor or press Tab"
+        label = f"Selected: {sel}"
+        cr.set_source_rgba(1, 1, 1, 0.7)
+        cr.set_font_size(18)
+        te = cr.text_extents(label)
+        cr.move_to((sw - te.width) / 2, bottom_y)
+        cr.show_text(label)
+
+    def _draw_monitor_box(self, cr, x, y, w, h, mon):
+        name = mon["name"]
+        is_sel = name in self.selected
+        is_focused = name == self.focused_name
+
+        # Fill — selected boxes get a subtle tint
+        if is_sel:
+            cr.set_source_rgba(0.13, 0.22, 0.30, 0.95)
         else:
-            points = {
-                round((nw_nat - cw_nat) / (2 * cs)),    # left-left
-                round((cw_nat - nw_nat) / (2 * cs)),    # right-right
-                round((nw_nat + cw_nat) / (2 * cs)),    # cur-right = new-left
-                round(-(nw_nat + cw_nat) / (2 * cs)),   # cur-left = new-right
-            }
-        return sorted(points)
+            cr.set_source_rgba(0.15, 0.15, 0.2, 0.9)
+        cr.rectangle(x, y, w, h)
+        cr.fill()
 
-    def _snap_offset(self, old, new, moving_positive):
-        """Snap new offset to alignment point if one was crossed."""
-        snaps = self._snap_offsets()
-        if moving_positive:
-            # Find smallest snap > old and <= new
-            candidates = [s for s in snaps if s > old and s <= new]
-            return min(candidates) if candidates else new
+        # Border — selected: cyan (thick); focused: green; both: cyan + green inner ring
+        if is_sel:
+            cr.set_source_rgba(0.2, 0.8, 1.0, 1.0)
+            cr.set_line_width(4)
+        elif is_focused:
+            cr.set_source_rgba(0.4, 0.8, 0.4, 1.0)
+            cr.set_line_width(3)
         else:
-            # Find largest snap < old and >= new
-            candidates = [s for s in snaps if s < old and s >= new]
-            return max(candidates) if candidates else new
+            cr.set_source_rgba(0.45, 0.45, 0.5, 1.0)
+            cr.set_line_width(2.5)
+        cr.rectangle(x, y, w, h)
+        cr.stroke()
+        if is_sel and is_focused:
+            cr.set_source_rgba(0.4, 0.8, 0.4, 1.0)
+            cr.set_line_width(2)
+            cr.rectangle(x + 4, y + 4, w - 8, h - 8)
+            cr.stroke()
 
-    def _draw_snap_lines(self, cr, cur_x, cur_y, cur_bw, cur_bh,
-                         new_x, new_y, new_bw, new_bh):
-        """Draw guide lines where monitor edges visually coincide.
+        # Index tag (for digit-key selection) + focus marker, top-left corner
+        idx = next((i for i, m in enumerate(self.mons) if m is mon), 0) + 1
+        tag = f"[{idx}]" + ("  focused" if is_focused else "")
+        cr.set_source_rgba(1, 1, 1, 0.55)
+        cr.select_font_face("Sans", 0, 0)
+        cr.set_font_size(12)
+        cr.move_to(x + 8, y + 18)
+        cr.show_text(tag)
 
-        Checks all pairs of corresponding edges (top/bottom or left/right)
-        and draws a line only when a current-monitor edge and a new-monitor
-        edge are at the same screen coordinate (within a small tolerance).
-        """
-        pos = self.position
-        tolerance = 1.5  # visual pixels
+        # Monitor name
+        cr.set_source_rgba(1, 1, 1, 0.95)
+        cr.set_font_size(min(w * 0.10, 20))
+        te = cr.text_extents(name)
+        cr.move_to(x + (w - te.width) / 2, y + h * 0.30)
+        cr.show_text(name)
+
+        # Active workspace (live)
+        ws = self.ws_active.get(name)
+        if ws is not None:
+            ws_label = f"ws {ws}"
+            cr.set_source_rgba(1.0, 0.8, 0.2, 0.95)
+            cr.set_font_size(min(w * 0.13, 26))
+            te = cr.text_extents(ws_label)
+            cr.move_to(x + (w - te.width) / 2, y + h * 0.50)
+            cr.show_text(ws_label)
+        resident = self.ws_resident.get(name)
+        if resident:
+            res_label = "workspaces: " + " ".join(str(i) for i in resident)
+            cr.set_source_rgba(1.0, 0.8, 0.2, 0.5)
+            cr.set_font_size(min(w * 0.05, 12))
+            te = cr.text_extents(res_label)
+            cr.move_to(x + (w - te.width) / 2, y + h * 0.60)
+            cr.show_text(res_label)
+
+        # Resolution / rate
+        res = f"{mon['width']}x{mon['height']}@{mon['rate']}Hz"
+        cr.set_source_rgba(1, 1, 1, 0.85)
+        cr.set_font_size(min(w * 0.07, 14))
+        te = cr.text_extents(res)
+        cr.move_to(x + (w - te.width) / 2, y + h * 0.74)
+        cr.show_text(res)
+
+        # Scale / logical size / position
+        lw, lh = logical_size(mon)
+        detail = (f"scale {format_scale(mon['scale'])}  ·  "
+                  f"{lw}x{lh} logical  ·  at {mon['x']},{mon['y']}")
+        cr.set_source_rgba(1, 1, 1, 0.4)
+        cr.set_font_size(min(w * 0.05, 11))
+        te = cr.text_extents(detail)
+        cr.move_to(x + (w - te.width) / 2, y + h * 0.86)
+        cr.show_text(detail)
+
+    def _draw_snap_lines(self, cr, box_a, box_b):
+        """Draw guide lines where edges of two draw-space boxes coincide."""
+        ax, ay, aw, ah = box_a
+        bx, by, bw, bh = box_b
+        tolerance = 2 * BOX_GAP + 1.5  # inset on both boxes + slack
         extend = 40
 
-        if pos in ("right", "left"):
-            # Horizontal edge pairs (y-coordinates)
-            pairs = [
-                (cur_y, new_y),                          # top-top
-                (cur_y + cur_bh, new_y + new_bh),        # bottom-bottom
-                (cur_y + cur_bh, new_y),                  # cur-bottom = new-top
-                (cur_y, new_y + new_bh),                  # cur-top = new-bottom
-            ]
-            aligned = []
-            for e1, e2 in pairs:
-                if abs(e1 - e2) <= tolerance:
-                    aligned.append((e1 + e2) / 2)
-            if not aligned:
-                return
-
-            cr.save()
-            left = min(cur_x, new_x) - extend
-            right = max(cur_x + cur_bw, new_x + new_bw) + extend
-            mid_l = min(cur_x, new_x)
-            mid_r = max(cur_x + cur_bw, new_x + new_bw)
+        # Horizontal edges (y-coordinates)
+        y_pairs = [(ay, by), (ay + ah, by + bh), (ay + ah, by), (ay, by + bh)]
+        y_aligned = [
+            (e1 + e2) / 2 for e1, e2 in y_pairs if abs(e1 - e2) <= tolerance
+        ]
+        if y_aligned:
+            left = min(ax, bx) - extend
+            right = max(ax + aw, bx + bw) + extend
+            mid_l = min(ax, bx)
+            mid_r = max(ax + aw, bx + bw)
             span = right - left if right != left else 1
-
-            for sy in dict.fromkeys(aligned):
+            cr.save()
+            for sy in dict.fromkeys(y_aligned):
                 pat = cairo.LinearGradient(left, sy, right, sy)
                 pat.add_color_stop_rgba(0, 0.6, 0.6, 0.6, 0)
                 pat.add_color_stop_rgba((mid_l - left) / span, 0.6, 0.6, 0.6, 0.5)
@@ -644,29 +943,20 @@ class MonitorPicker(Gtk.Window):
                 cr.line_to(right, sy)
                 cr.stroke()
             cr.restore()
-        else:
-            # Vertical edge pairs (x-coordinates)
-            pairs = [
-                (cur_x, new_x),                          # left-left
-                (cur_x + cur_bw, new_x + new_bw),        # right-right
-                (cur_x + cur_bw, new_x),                  # cur-right = new-left
-                (cur_x, new_x + new_bw),                  # cur-left = new-right
-            ]
-            aligned = []
-            for e1, e2 in pairs:
-                if abs(e1 - e2) <= tolerance:
-                    aligned.append((e1 + e2) / 2)
-            if not aligned:
-                return
 
-            cr.save()
-            top = min(cur_y, new_y) - extend
-            bottom = max(cur_y + cur_bh, new_y + new_bh) + extend
-            mid_t = min(cur_y, new_y)
-            mid_b = max(cur_y + cur_bh, new_y + new_bh)
+        # Vertical edges (x-coordinates)
+        x_pairs = [(ax, bx), (ax + aw, bx + bw), (ax + aw, bx), (ax, bx + bw)]
+        x_aligned = [
+            (e1 + e2) / 2 for e1, e2 in x_pairs if abs(e1 - e2) <= tolerance
+        ]
+        if x_aligned:
+            top = min(ay, by) - extend
+            bottom = max(ay + ah, by + bh) + extend
+            mid_t = min(ay, by)
+            mid_b = max(ay + ah, by + bh)
             span = bottom - top if bottom != top else 1
-
-            for sx in dict.fromkeys(aligned):
+            cr.save()
+            for sx in dict.fromkeys(x_aligned):
                 pat = cairo.LinearGradient(sx, top, sx, bottom)
                 pat.add_color_stop_rgba(0, 0.6, 0.6, 0.6, 0)
                 pat.add_color_stop_rgba((mid_t - top) / span, 0.6, 0.6, 0.6, 0.5)
@@ -679,271 +969,45 @@ class MonitorPicker(Gtk.Window):
                 cr.stroke()
             cr.restore()
 
-    # ── Config / command helpers ──────────────────────────────────────
-
-    def _new_config_str(self):
-        """Config string for the new monitor at its calculated position."""
-        x, y = calc_hypr_position(self.position, self.current, self.new_mon, self.offset)
-        return _mon_config_str(self.new_mon, x, y, self.new_scale_tenths)
-
-    def _build_display_cmd(self):
-        """Build a shell-evaluable command setting BOTH monitors, with $(( ))."""
-        c = self.current
-        n = self.new_mon
-        x_expr, y_expr = _build_pos_exprs(
-            self.position, self.current, self.new_mon, self.offset,
-            new_scale_tenths=self.new_scale_tenths,
-        )
-        sc = _format_scale(self.new_scale_tenths)
-        cur_sc = _format_scale(_scale_tenths_from(c))
-        cur_cmd = (
-            f'hyprctl keyword monitor '
-            f'"{c["name"]}, {c["width"]}x{c["height"]}@{c["rate"]}, '
-            f'{c["x"]}x{c["y"]}, {cur_sc}"'
-        )
-        new_cmd = (
-            f'hyprctl keyword monitor '
-            f'"{n["name"]}, {n["width"]}x{n["height"]}@{n["rate"]}, '
-            f'{x_expr}x{y_expr}, {sc}"'
-        )
-        return f"{cur_cmd}\n{new_cmd}"
-
-    def _update_cmd(self):
-        """Refresh the command textview text and color.
-
-        Skipped while the user is actively editing. If a previous edit has
-        been preserved (cmd_edited), regenerating from state discards it.
-        """
-        if self.edit_mode:
-            return
-        if self.cmd_edited:
-            self.cmd_edited = False
-            self.cmd_prefix_label.set_text("Setup commands (to be run) — e: edit:")
-        cmd_text = self._build_display_cmd()
-        bx, by = calc_hypr_position(self.position, self.current, self.new_mon, self.offset)
-        overlap = monitors_overlap(self.current, bx, by, self.new_mon)
-        color = "#ff5a4d" if overlap else "#66e6a0"
-        self.cmd_css.load_from_data(
-            f"textview, textview text {{ color: {color}; font-family: monospace;"
-            f"  font-size: 12px; background: transparent; caret-color: #ffcc33; }}"
-            f"textview text selection {{ background-color: #3388cc; color: white; }}"
-            .encode()
-        )
-        self.cmd_view.get_buffer().set_text(cmd_text)
-
-    # ── Drawing ───────────────────────────────────────────────────────
-
-    def _box_dims(self, sw):
-        """Compute display-space box sizes using native resolution.
-
-        Uses raw pixel dimensions (not divided by scale) so monitors with
-        different scales appear proportional to their actual pixel count
-        rather than being distorted by scale differences.
-        """
-        cw, ch = self.current["width"], self.current["height"]
-        nw, nh = self.new_mon["width"], self.new_mon["height"]
-        max_dim = max(cw, ch, nw, nh)
-        s = (sw * 0.18) / max_dim
-        return cw * s, ch * s, nw * s, nh * s
-
-    def on_draw(self, widget, cr):
-        alloc = widget.get_allocation()
-        sw, sh = alloc.width, alloc.height
-
-        # Background
-        cr.set_source_rgba(0.05, 0.05, 0.1, 0.88)
-        cr.rectangle(0, 0, sw, sh)
-        cr.fill()
-
-        cur_bw, cur_bh, new_bw, new_bh = self._box_dims(sw)
-
-        # Tiny gap so both border colors are visible but boxes nearly touch
-        gap = 4
-        pos = self.position
-        if pos == "right":
-            total_w = cur_bw + gap + new_bw
-            total_h = max(cur_bh, new_bh)
-            ox = (sw - total_w) / 2
-            oy = (sh - total_h) / 2
-            cur_x, cur_y = ox, oy + (total_h - cur_bh) / 2
-            new_x, new_y = ox + cur_bw + gap, oy + (total_h - new_bh) / 2
-        elif pos == "left":
-            total_w = new_bw + gap + cur_bw
-            total_h = max(cur_bh, new_bh)
-            ox = (sw - total_w) / 2
-            oy = (sh - total_h) / 2
-            new_x, new_y = ox, oy + (total_h - new_bh) / 2
-            cur_x, cur_y = ox + new_bw + gap, oy + (total_h - cur_bh) / 2
-        elif pos == "below":
-            total_w = max(cur_bw, new_bw)
-            total_h = cur_bh + gap + new_bh
-            ox = (sw - total_w) / 2
-            oy = (sh - total_h) / 2
-            cur_x, cur_y = ox + (total_w - cur_bw) / 2, oy
-            new_x, new_y = ox + (total_w - new_bw) / 2, oy + cur_bh + gap
-        else:  # above
-            total_w = max(cur_bw, new_bw)
-            total_h = new_bh + gap + cur_bh
-            ox = (sw - total_w) / 2
-            oy = (sh - total_h) / 2
-            new_x, new_y = ox + (total_w - new_bw) / 2, oy
-            cur_x, cur_y = ox + (total_w - cur_bw) / 2, oy + new_bh + gap
-
-        # Apply visual offset to new monitor box (perpendicular axis)
-        if self.offset != 0:
-            cw = self.current["width"]
-            ch = self.current["height"]
-            max_native = max(cw, ch)
-            max_box = max(cur_bw, cur_bh)
-            vis_scale = max_box / max_native if max_native else 1
-            visual_off = self.offset * self.current["scale"] * vis_scale
-            if pos in ("right", "left"):
-                new_y += visual_off
-            else:
-                new_x += visual_off
-
-        # Draw monitor boxes
-        self._draw_monitor_box(
-            cr, cur_x, cur_y, cur_bw, cur_bh,
-            self.current, border_color=(0.4, 0.8, 0.4), is_current=True,
-        )
-        self._draw_monitor_box(
-            cr, new_x, new_y, new_bw, new_bh,
-            self.new_mon, border_color=(0.2, 0.8, 1.0), is_current=False,
-        )
-
-        # Snap alignment guide lines
-        self._draw_snap_lines(cr, cur_x, cur_y, cur_bw, cur_bh,
-                              new_x, new_y, new_bw, new_bh)
-
-        # --- Bottom info area (drawn upward from bottom) ---
-        # Command row is a GTK widget (see __init__), not drawn here.
-        cr.select_font_face("Sans", 0, 0)
-        bottom_y = sh - 30
-
-        # Row 1 (lowest): hint bar
-        hint = "Arrows: position  \u00b7  Alt/Shift+Arrow: offset  \u00b7  s/S: scale \u00b10.1  \u00b7  r/R: refresh rate  \u00b7  e: edit cmd  \u00b7  Ctrl+C: copy  \u00b7  Enter: confirm  \u00b7  Esc: cancel"
-        cr.set_source_rgba(1, 1, 1, 0.45)
-        cr.set_font_size(14)
-        te = cr.text_extents(hint)
-        cr.move_to((sw - te.width) / 2, bottom_y)
-        cr.show_text(hint)
-
-        # Row 2: command is the GTK textview (skip — 2 lines + label + padding)
-        bottom_y = sh - 120
-
-        # Row 3: scale (only when changed from original)
-        if self.new_scale_tenths != self.orig_scale_tenths:
-            scale_label = f"Scale: {_format_scale(self.orig_scale_tenths)} \u2192 {_format_scale(self.new_scale_tenths)}"
-            cr.select_font_face("Sans", 0, 0)
-            cr.set_source_rgba(1.0, 0.8, 0.2, 0.8)
-            cr.set_font_size(16)
-            te = cr.text_extents(scale_label)
-            cr.move_to((sw - te.width) / 2, bottom_y)
-            cr.show_text(scale_label)
-            bottom_y -= 28
-
-        # Row 4: offset (only when non-zero)
-        if self.offset != 0:
-            axis = "vertical" if pos in ("right", "left") else "horizontal"
-            offset_label = f"Offset: {self.offset:+d}px {axis}"
-            cr.select_font_face("Sans", 0, 0)
-            cr.set_source_rgba(0.2, 0.8, 1.0, 0.7)
-            cr.set_font_size(16)
-            te = cr.text_extents(offset_label)
-            cr.move_to((sw - te.width) / 2, bottom_y)
-            cr.show_text(offset_label)
-            bottom_y -= 28
-
-        # Row 5 (topmost): position label
-        pos_label = f"Position: {pos.capitalize()}"
-        cr.select_font_face("Sans", 0, 0)
-        cr.set_source_rgba(1, 1, 1, 0.7)
-        cr.set_font_size(20)
-        te = cr.text_extents(pos_label)
-        cr.move_to((sw - te.width) / 2, bottom_y)
-        cr.show_text(pos_label)
-
-    def _draw_monitor_box(self, cr, x, y, w, h, mon, border_color, is_current):
-        # Fill
-        cr.set_source_rgba(0.15, 0.15, 0.2, 0.9)
-        cr.rectangle(x, y, w, h)
-        cr.fill()
-
-        # Border
-        cr.set_source_rgba(*border_color, 1.0)
-        cr.set_line_width(3 if is_current else 2.5)
-        cr.rectangle(x, y, w, h)
-        cr.stroke()
-
-        # Tag label (inside box, top)
-        tag = "Current" if is_current else "New"
-        cr.set_source_rgba(*border_color, 0.8)
-        cr.select_font_face("Sans", 0, 0)
-        cr.set_font_size(11)
-        te = cr.text_extents(tag)
-        cr.move_to(x + (w - te.width) / 2, y + 16)
-        cr.show_text(tag)
-
-        # Icon
-        icon = mon.get("icon", "")
-        cr.set_source_rgba(1, 1, 1, 0.9)
-        cr.set_font_size(min(w, h) * 0.22)
-        te = cr.text_extents(icon)
-        cr.move_to(x + (w - te.width) / 2, y + h * 0.38)
-        cr.show_text(icon)
-
-        # Resolution label
-        res = f"{mon['width']}x{mon['height']}@{mon['rate']}Hz"
-        cr.set_source_rgba(1, 1, 1, 0.85)
-        cr.set_font_size(min(w * 0.08, 13))
-        te = cr.text_extents(res)
-        cr.move_to(x + (w - te.width) / 2, y + h * 0.55)
-        cr.show_text(res)
-
-        # Device name
-        cr.set_source_rgba(1, 1, 1, 0.6)
-        cr.set_font_size(min(w * 0.07, 12))
-        te = cr.text_extents(mon["name"])
-        cr.move_to(x + (w - te.width) / 2, y + h * 0.68)
-        cr.show_text(mon["name"])
-
-        # Scale info (use _format_scale for clean display of edited values)
-        scale_text = f"scale {_format_scale(round(mon['scale'] * 10))}"
-        lw, lh = logical_size(mon)
-        logical_text = f"{int(lw)}x{int(lh)} logical"
-        cr.set_source_rgba(1, 1, 1, 0.4)
-        cr.set_font_size(min(w * 0.06, 10))
-        te = cr.text_extents(scale_text)
-        cr.move_to(x + (w - te.width) / 2, y + h * 0.80)
-        cr.show_text(scale_text)
-        te = cr.text_extents(logical_text)
-        cr.move_to(x + (w - te.width) / 2, y + h * 0.90)
-        cr.show_text(logical_text)
-
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: monitor-picker.py <monitor-to-place>", file=sys.stderr)
+    target = sys.argv[1] if len(sys.argv) > 1 else None
+
+    entries = _query_wlr_randr()
+    mons = [
+        _build_mon_info(e) for e in entries
+        if e.get("enabled") or e["name"] == target
+    ]
+    if not mons:
+        print("No monitors found", file=sys.stderr)
+        sys.exit(1)
+    if target and not any(m["name"] == target for m in mons):
+        print(f"Unknown monitor: {target}", file=sys.stderr)
         sys.exit(1)
 
-    target_name = sys.argv[1]
+    # A disabled preselect target is being enabled: give it a starting spot
+    # at the right edge of the current layout.
+    for m in mons:
+        if m["name"] == target and not m["enabled"]:
+            others = [o for o in mons if o["enabled"]]
+            if others:
+                m["x"] = max(o["x"] + logical_size(o)[0] for o in others)
+                m["y"] = min(o["y"] for o in others)
+            m["enabled"] = True
 
-    current = get_active_monitor(target_name)
-    if not current:
-        print("No active monitor found", file=sys.stderr)
-        sys.exit(1)
+    # Default selection: the given target, else the focused monitor
+    preselect = target
+    if not preselect:
+        for hm in _query_hypr_monitors():
+            if hm.get("focused"):
+                preselect = hm.get("name")
+                break
 
-    new_mon = get_monitor_by_name(target_name)
-    if not new_mon:
-        print(f"Unknown monitor: {target_name}", file=sys.stderr)
-        sys.exit(1)
-
-    picker = MonitorPicker(current, new_mon)
+    editor = LayoutEditor(mons, preselect)
     Gtk.main()
 
-    if picker.result:
-        for cfg in picker.result:
+    if editor.result:
+        for cfg in editor.result:
             print(cfg)
         sys.exit(0)
     else:

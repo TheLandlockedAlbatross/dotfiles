@@ -49,9 +49,14 @@ if [[ -n "$is_active" ]]; then
     python3 -c "
 import os, sys
 name, conf = sys.argv[1], os.path.expanduser('~/.config/hypr/monitors.conf')
+def is_line(l):
+    # Exact name match on the first field so DP-1 never matches DP-10
+    s = l.strip()
+    return (s.startswith('monitor') and '=' in s
+            and s.split('=', 1)[1].split(',')[0].strip() == name)
 lines = open(conf).readlines()
-out = [f'monitor = {name}, disable\n' if l.strip().startswith('monitor') and '= ' + name in l else l for l in lines]
-if not any('= ' + name in l for l in lines if l.strip().startswith('monitor')):
+out = [f'monitor = {name}, disable\n' if is_line(l) else l for l in lines]
+if not any(is_line(l) for l in lines):
     out.append(f'monitor = {name}, disable\n')
 open(conf, 'w').writelines(out)
 " "$MONITOR"
@@ -59,7 +64,8 @@ open(conf, 'w').writelines(out)
     swayosd-client --custom-icon video-display --custom-message "$MONITOR disabled"
 else
     # Monitor is disabled or not listed — launch picker for placement
-    # Picker outputs TWO config lines (current + new) and writes monitors.conf
+    # Picker outputs config lines for ALL active monitors + the placed one
+    # and writes the full layout to monitors.conf
     PICKER="$(dirname "$0")/monitor-picker.py"
     if PICKED_CONFIGS=$(python3 "$PICKER" "$MONITOR" 2>/dev/null); then
         while IFS= read -r config; do
