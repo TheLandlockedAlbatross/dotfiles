@@ -1,0 +1,1 @@
+st -e $SHELL -c "mullvad status -v && mullvad --help && exec $SHELL -i "

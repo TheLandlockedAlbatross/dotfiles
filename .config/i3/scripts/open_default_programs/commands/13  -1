@@ -1,0 +1,1 @@
+st -e $SHELL -ci "neofetch ;  tput cuu1; exec $SHELL"

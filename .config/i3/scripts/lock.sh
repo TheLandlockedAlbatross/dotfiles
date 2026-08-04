@@ -174,7 +174,7 @@ my_i3lock () {
         --bar-base-width 4
         --bar-total-width 568
         --bar-direction=2
-        --bar-max-height 4
+        --bar-max-height 32
         --bar-count 32
         # Other settings
         --indicator
@@ -198,7 +198,7 @@ my_i3lock () {
         --keyhl-color=${KEY_FLASH}
     )
     args_misc=(
-        #--no-verify
+        # --no-verify
         --show-failed-attempts
         --screen=${LOCK_DISPLAY}
         --pointer=win # Don't hide mouse pointer in lock screen

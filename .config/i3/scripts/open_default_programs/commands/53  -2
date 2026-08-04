@@ -1,0 +1,1 @@
+xfce4-terminal --title='Fluidsynth' -e "$SHELL -c 'fluidsynth -a alsa -o synth.ladspa.active=1 ~/.local/share/soundfonts/_SF2__GM_SoundFonts__shared_by_ZSF__-_Crisis_GM_3.51_ZSF_Edit.sf2 -g 1 ; exec $SHELL'" &

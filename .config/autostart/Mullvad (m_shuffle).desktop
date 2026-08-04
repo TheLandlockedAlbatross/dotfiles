@@ -1,0 +1,13 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=0.9.4
+Type=Application
+Name=Mullvad (m_shuffle)
+Comment=Connect to nearest mullvad server using script
+Exec=zsh -ic 'source /home/adam/.zsh/custom/mullvad.zsh ; m_shuffle 1'
+OnlyShowIn=XFCE;
+RunHook=0
+StartupNotify=false
+Terminal=false
+Hidden=false
+

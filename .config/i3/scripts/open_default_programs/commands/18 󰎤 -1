@@ -1,0 +1,1 @@
+st -e $SHELL -ic 'if [[ -d $dev ]]; then cd $dev ; if [[ -L ./current ]]; then cd current && claude && exec $SHELL -i ; else echo "Warning: $dev/current not set" ; fi ; fi'

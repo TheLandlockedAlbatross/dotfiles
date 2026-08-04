@@ -8,3 +8,15 @@
 # Shell history
 .zsh_history
 .bash_history
+
+# tmux plugins are cloned/managed by tpm
+.config/tmux/plugins/
+
+# venv + cloned pyqt-examples repo only, no own code
+.config/i3/scripts/open_default_programs/i3_py3_default_programs/
+
+# Timestamped backups made by the open_default_programs editor
+.config/i3/scripts/open_default_programs/commands/*-changed_*
+
+# nvim is a jdhao/nvim-config clone, managed by nvim-setup.sh
+.config/nvim/

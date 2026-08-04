@@ -1,0 +1,1 @@
+krusader --left /mnt/zfs/AOC-Media-12TB/Media/ --right $HOME	

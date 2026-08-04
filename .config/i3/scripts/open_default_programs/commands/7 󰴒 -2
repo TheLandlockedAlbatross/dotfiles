@@ -1,0 +1,1 @@
+/usr/bin/flatpak run --branch=beta --arch=x86_64 --command=gimp-3.2 --file-forwarding org.gimp.GIMP

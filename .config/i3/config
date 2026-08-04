@@ -37,7 +37,7 @@ smart_borders on
 ####################################################################################################
 # Gaps
 ####################################################################################################
-gaps inner 10
+gaps inner 5
 bindsym $mod+$caps+0 gaps inner all set 0
 bindsym $mod+Shift+$caps+0 gaps outer all set 0
 bindsym $mod+$caps+plus gaps inner current plus 1
@@ -110,12 +110,6 @@ exec --no-startup-id nm-applet
 floating_modifier $mod
 
 # change focus
-bindsym $mod+j focus left
-bindsym $mod+k focus down
-bindsym $mod+l focus up
-bindsym $mod+semicolon focus right
-
-# alternatively, you can use the cursor keys:
 bindsym $mod+Left focus left
 bindsym $mod+Down focus down
 bindsym $mod+Up focus up

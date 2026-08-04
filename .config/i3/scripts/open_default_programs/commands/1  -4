@@ -1,0 +1,1 @@
+run_cmds_sequential "firefox --new-window https://www.mlb.com/scores" "firefox --new-window https://methstreams.com/mlb-streams/live4/" "firefox --new-window https://methstreams.com/mlb-streams/live4/" "firefox --new-window https://methstreams.com/mlb-streams/live4/"

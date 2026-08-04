@@ -155,27 +155,36 @@ change_command_file() {
         # echo "${combobox_entries}" >> "${focused_command_file}test"
         # echo "$(pwd)" >> "${focused_command_file}test"
 
-        # Default separator is | for yad
+        # Default separator is | for yad, change to , to work better with commands with pipes
         IFS_BACKUP="${IFS}"
-        IFS='|' read -r -a res < \
+        IFS=',' read -r -a res < \
             <(yad --fixed --width=500 --height=100 \
                 --image=i3_transparent --sticky --mouse \
                 --selectable-labels \
+                --separator=',' --item_seperator=',' \
                 --form \
-                --focus-field=5 \
-                --field="\nDefault program ${command_flag} for workspace ${FOCUSED} is currently\:\n\n${focused_command}\n:LBL" \
-                --field="Previous commands (for reference)\::LBL" \
-                --field=":CBE" ${combobox_quote_pairs} "${combobox_entries}" \
+                --focus-field=6 \
+                --field="\nDefault program ${command_flag} for workspace ${FOCUSED} is currently\:\n:LBL" \
+                --field="":CBE "" "${focused_command}" \
+                --field="\nPrevious commands (for reference)\::LBL" \
+                --field="":CBE "" "${combobox_entries}" \
                 --field="\nEnter new default command ${command_flag} for workspace ${FOCUSED} \::LBL"  \
                 --field=":CE" \
             )
         IFS="${IFS_BACKUP}"
-        if [[ -n "${res[4]}" ]]; then
+        # # yad return order can get bizarre, below is good snippet to debug
+        # i=0
+        # echo "results:" > ~/.config/i3/scripts/open_default_programs/commands/testas
+        # for res_i in "${res[@]}"; do
+        #     echo "$i -> $res_i" >> ~/.config/i3/scripts/open_default_programs/commands/testas
+        #     i=$((i+1))
+        # done
+        if [[ -n "${res[5]}" ]]; then
             mkdir -p $(dirname "${focused_command_file}")
             if [[ -f "${focused_command_file}" ]]; then
                 mv "${focused_command_file}" "${focused_command_file}-changed_$(date +'%a_%Y%m%d_%H%M%S')"
             fi
-            echo "${res[4]}" > "${focused_command_file}"
+            echo "${res[5]}" > "${focused_command_file}"
         fi
     fi
 }

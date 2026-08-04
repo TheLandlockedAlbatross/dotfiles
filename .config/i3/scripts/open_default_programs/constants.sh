@@ -8,3 +8,6 @@ WS_PER_MONITOR=$((( ${NUM_WS} / ${NUM_DISPLAYS})))
 FOCUSED="$(i3-msg -t get_workspaces | jq -r '.[] | select(.focused == true) | .name')"
 FOCUSED_NUM=$(echo "${FOCUSED}" | tr -cd '[:digit:].')
 FOCUSED_SYM=$(echo "${FOCUSED}" | tr -d '[:digit:].')
+
+ACTIVE="$(i3-msg -t get_workspaces | jq -r '[.[] | select(.visible == true or .focused == true) | .name] | join(",")')"
+ACTIVE_NUM="$(i3-msg -t get_workspaces | jq '[.[] | select(.visible == true)] | length')"

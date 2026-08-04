@@ -1,0 +1,1 @@
+st -e $SHELL -ic '$EDITOR $i3/scripts/open_default_programs/commands'

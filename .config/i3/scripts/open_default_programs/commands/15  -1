@@ -1,0 +1,1 @@
+st -e $SHELL -ci ". $HOME/.$(basename $SHELL)rc ; tx i3"
