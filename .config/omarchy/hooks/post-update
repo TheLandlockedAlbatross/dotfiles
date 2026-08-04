@@ -1,0 +1,64 @@
+#!/bin/bash
+# Re-assert custom power-profile behavior after every omarchy update.
+#
+# Goal: NEVER performance unless set manually. AC -> balanced, battery -> power-saver.
+#
+# Three things force performance on AC on this ROG Z13; this hook neutralizes them:
+#   1. asusd (/etc/asusd/asusd.ron) is the real owner of platform_profile (via
+#      throttle_thermal_policy). Its default platform_profile_on_ac: Performance is
+#      what actually kept forcing performance on every plug-in. Set it to Balanced.
+#   2. omarchy regenerates /etc/udev/rules.d/99-power-profile.rules with an
+#      AC->performance default on update; we overwrite it with AC->balanced /
+#      battery->power-saver.
+#   3. omarchy-powerprofiles-init sets performance on AC at hyprland login; that is
+#      neutralized by a corrective exec-once in ~/.config/hypr/autostart.conf
+#      (a user config file, not managed here).
+#
+# Idempotent: safe to run manually to (re)install everything.
+set -e
+
+# --- 1. asusd: AC profile Balanced, battery Quiet(=power-saver). Only touch/restart
+#        if it has drifted back to Performance (e.g. after an asusd package update). ---
+if grep -q 'platform_profile_on_ac: *Performance' /etc/asusd/asusd.ron 2>/dev/null; then
+  sudo sed -i 's/\(platform_profile_on_ac: *\)Performance/\1Balanced/' /etc/asusd/asusd.ron
+  sudo systemctl restart asusd
+fi
+
+# --- 2. Helper: AC -> balanced, battery -> power-saver. Scans all Mains+USB supplies
+#        so USB-C charging is detected even when the legacy AC device is quiet. ---
+sudo install -Dm755 /dev/stdin /usr/local/bin/power-profile-autoset <<'HELPER'
+#!/bin/bash
+src=battery
+for ps in /sys/class/power_supply/*; do
+  [[ -r "$ps/type" && -r "$ps/online" ]] || continue
+  t=$(cat "$ps/type" 2>/dev/null)
+  [[ "$t" == "Mains" || "$t" == "USB" ]] || continue
+  [[ "$(cat "$ps/online" 2>/dev/null)" == "1" ]] && { src=ac; break; }
+done
+if [[ "$src" == "ac" ]]; then exec /usr/bin/powerprofilesctl set balanced
+else exec /usr/bin/powerprofilesctl set power-saver; fi
+HELPER
+
+# --- 3. udev: run the helper on plug/unplug (change events). No fixed --unit: both
+#        USB-C ports fire simultaneously and a shared unit name makes the 2nd run
+#        fail; omitting it lets systemd-run auto-name each invocation uniquely. ---
+sudo tee /etc/udev/rules.d/99-power-profile.rules >/dev/null <<'RULE'
+# Custom (overrides omarchy default AC->performance): AC->balanced, battery->power-saver.
+ACTION=="change", SUBSYSTEM=="power_supply", ATTR{type}=="Mains", RUN+="/usr/bin/systemd-run --no-block --collect --property=After=power-profiles-daemon.service /usr/local/bin/power-profile-autoset"
+ACTION=="change", SUBSYSTEM=="power_supply", ATTR{type}=="USB", RUN+="/usr/bin/systemd-run --no-block --collect --property=After=power-profiles-daemon.service /usr/local/bin/power-profile-autoset"
+RULE
+
+# --- 4. Remove the obsolete boot service (it had a systemd ordering cycle and was
+#        deleted at every boot to break it, so it never ran) and the first-attempt
+#        helper. Boot is handled by asusd; login by the hypr exec-once corrective. ---
+sudo systemctl disable --now power-profile-autoset.service 2>/dev/null || true
+sudo systemctl disable --now power-profile-ac.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/power-profile-autoset.service \
+           /etc/systemd/system/power-profile-ac.service \
+           /usr/local/bin/power-profile-ac
+
+sudo systemctl daemon-reload
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=power_supply
+
+echo "Done. platform_profile=$(cat /sys/firmware/acpi/platform_profile), ppd=$(powerprofilesctl get)"
