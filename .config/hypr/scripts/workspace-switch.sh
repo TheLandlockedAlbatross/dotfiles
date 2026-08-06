@@ -2,24 +2,21 @@
 TARGET="$1"
 [[ $TARGET =~ ^[0-9]+$ ]] || exit 1
 PREV_FILE=/tmp/hypr-workspace-prev
-SPLIT_STATE=/tmp/hypr-workspace-split
 read -r FOCUSED_MON CURRENT < <(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.activeWorkspace.id)"')
 
-# If workspace split is active, determine the correct monitor
-SPLIT_DEST=""
-if [[ -f $SPLIT_STATE ]]; then
-  mode=$(cat "$SPLIT_STATE")
-  monitors=$(hyprctl monitors -j | jq -r '[.[] | select(.disabled == false)] | sort_by(.id) | .[].name')
-  mon_a=$(echo "$monitors" | head -1)
-  mon_b=$(echo "$monitors" | sed -n '2p')
-
-  if [[ -n $mon_b ]]; then
-    if (( TARGET % 2 == 1 )); then
-      [[ $mode == "normal" ]] && SPLIT_DEST="$mon_a" || SPLIT_DEST="$mon_b"
-    else
-      [[ $mode == "normal" ]] && SPLIT_DEST="$mon_b" || SPLIT_DEST="$mon_a"
-    fi
-  fi
+# Self-heal: monitor drops scatter workspaces onto surviving monitors and they
+# never move back on their own. Re-home the target to its rule monitor first.
+RULE_MON=$(hyprctl -j workspacerules | jq -r --argjson ws "$TARGET" '
+  [ .[] | select(.monitor) | select(
+      ((.workspaceString | test("^[0-9]+$")) and ((.workspaceString | tonumber) == $ws))
+      or
+      ((.workspaceString | test("^r\\[[0-9]+-[0-9]+\\]$")) and
+       ((.workspaceString | capture("r\\[(?<a>[0-9]+)-(?<b>[0-9]+)\\]")) |
+        ((.a | tonumber) <= $ws and $ws <= (.b | tonumber))))
+    ) | .monitor ] | first // empty')
+CUR_MON=$(hyprctl workspaces -j | jq -r ".[] | select(.id == $TARGET) | .monitor")
+if [[ -n $RULE_MON && -n $CUR_MON && $RULE_MON != "$CUR_MON" ]]; then
+    hyprctl dispatch moveworkspacetomonitor "$TARGET" "$RULE_MON" >/dev/null
 fi
 
 # Pre-switch workspace background (if feature is active)
@@ -32,7 +29,7 @@ if [[ -f $WS_BG_MAP ]]; then
     BG_TARGET="$TARGET"
   fi
   BG=$(sed -n "${BG_TARGET}p" "$WS_BG_MAP")
-  BG_MON="${SPLIT_DEST:-$FOCUSED_MON}"
+  BG_MON="$FOCUSED_MON"
   if [[ -n $BG && -n $BG_MON ]]; then
     awww img -o "$BG_MON" "$BG" --transition-type none >/dev/null 2>&1
     sleep "$(cat /tmp/hypr-workspace-bg-framedur 2>/dev/null || echo 0.03)"
@@ -56,10 +53,4 @@ else
         echo "$CURRENT" > "$PREV_FILE"
     fi
     hyprctl dispatch workspace "$TARGET"
-fi
-
-# Enforce split: move workspace to correct monitor after switching
-if [[ -n $SPLIT_DEST ]]; then
-  hyprctl dispatch moveworkspacetomonitor "$TARGET $SPLIT_DEST" >/dev/null 2>&1
-  hyprctl dispatch focusmonitor "$SPLIT_DEST" >/dev/null 2>&1
 fi

@@ -53,7 +53,7 @@ build_cache() {
         [[ -z $odd_path ]] && odd_path="${bgs[0]}"
         [[ -z $even_path ]] && even_path="${bgs[1]:-${bgs[0]}}"
       fi
-      for ws in {1..10}; do
+      for ws in {1..40}; do
         if (( ws % 2 == 1 )); then
           mapping+=("$odd_path")
         else
@@ -76,7 +76,7 @@ build_cache() {
         build_default_cache
         return
       fi
-      for ws in {1..10}; do
+      for ws in {1..40}; do
         mapping+=("${resolved[$(( (ws - 1) % total ))]}")
       done
       ;;
@@ -94,7 +94,7 @@ build_default_cache() {
   local total=${#bgs[@]}
   (( total == 0 )) && return
   local -a mapping
-  for ws in {1..10}; do
+  for ws in {1..40}; do
     mapping+=("${bgs[$(( (ws - 1) % total ))]}")
   done
   printf '%s\n' "${mapping[@]}" > "$CACHE_FILE"
