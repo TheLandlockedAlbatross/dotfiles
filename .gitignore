@@ -11,7 +11,14 @@
 !.zsh/custom/*.zsh
 !.zsh/custom/x11/
 !.zsh/custom/x11/*.zsh
+!.bashrc
+!.bash_profile
+!.bash/
+!.bash/custom/
+!.bash/custom/*.bash
 !.config/
+!.config/shell/
+!.config/shell/*
 !.config/omarchy/
 !.config/omarchy/themes/
 !.config/omarchy/themes/ethereal-extended/

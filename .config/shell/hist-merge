@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+####################################################################################################
+# hist-merge - read-only merged view of multiple shells' history files
+#
+# Usage:
+#   hist-merge [--raw N] [shell:path ...]
+#
+# With no shell:path args, resolves each known shell's history file from env vars:
+#   HISTORY_SCOPE / HISTORY_SCOPE_<SHELL> = local (default) | global
+#     local:  use ./.<shell>_history if it exists and cwd != HOME, else ~/.<shell>_history
+#     global: always ~/.<shell>_history
+#   (fish has no per-directory history; always ~/.local/share/fish/fish_history)
+#
+# Output: numbered, time-ordered entries tagged by source shell. Entries without timestamps
+# sort first (in file order). Multi-line commands are shown joined with ' | ' in the listing.
+# --raw N prints only entry N's command text (real newlines restored), suitable for eval.
+#
+# This script only READS history files; it never writes or modifies them.
+# Timestamp formats parsed: zsh extended (': <epoch>:<elapsed>;cmd'), bash ('#<epoch>' comment
+# lines), fish ('- cmd:' / 'when:' yaml). Needs gawk (strftime).
+####################################################################################################
+
+raw=""
+if [[ "${1}" == "--raw" ]]; then
+    raw="${2}"
+    shift 2
+fi
+
+specs=("$@")
+if [[ ${#specs[@]} -eq 0 ]]; then
+    for sh in zsh bash; do
+        scope_var="HISTORY_SCOPE_${sh^^}"
+        scope="${!scope_var:-${HISTORY_SCOPE:-local}}"
+        if [[ "${scope}" == "local" && -f "${PWD}/.${sh}_history" && "${PWD}" != "${HOME}" ]]; then
+            specs+=("${sh}:${PWD}/.${sh}_history")
+        else
+            specs+=("${sh}:${HOME}/.${sh}_history")
+        fi
+    done
+    specs+=("fish:${HOME}/.local/share/fish/fish_history")
+fi
+
+args=()
+for spec in "${specs[@]}"; do
+    sh="${spec%%:*}"
+    path="${spec#*:}"
+    [[ -f "${path}" ]] || continue
+    args+=("SHELL=${sh}" "${path}")
+done
+[[ ${#args[@]} -eq 0 ]] && exit 0
+
+# Pass 1: parse each file into 'epoch <TAB> seq <TAB> shell <TAB> cmd' records (\001 = embedded
+# newline). Pass 2: stable numeric sort by epoch. Pass 3: number and format (or emit --raw entry).
+awk '
+function flush() {
+    if (have) print epoch "\t" (++seq) "\t" cursh "\t" cmd
+    have = 0; cmd = ""; epoch = 0
+}
+FNR == 1 { flush(); cont = 0; pend = 0 }
+{
+    if (SHELL == "zsh") {
+        line = $0
+        iscont = (line ~ /\\$/)
+        if (iscont) sub(/\\$/, "", line)
+        if (cont) {
+            cmd = cmd "\001" line
+        } else {
+            flush()
+            if (line ~ /^: [0-9]+:[0-9]+;/) {
+                epoch = line; sub(/^: /, "", epoch); sub(/:.*/, "", epoch); epoch += 0
+                cmd = line; sub(/^: [0-9]+:[0-9]+;/, "", cmd)
+            } else {
+                epoch = 0; cmd = line
+            }
+            have = 1; cursh = SHELL
+        }
+        cont = iscont
+    } else if (SHELL == "bash") {
+        if ($0 ~ /^#[0-9]+$/) {
+            pend = substr($0, 2) + 0
+        } else {
+            flush()
+            epoch = pend; cmd = $0; have = 1; cursh = SHELL
+        }
+    } else if (SHELL == "fish") {
+        if ($0 ~ /^- cmd: /) {
+            flush()
+            cmd = substr($0, 8)
+            gsub(/\\\\/, "\002", cmd); gsub(/\\n/, "\001", cmd); gsub(/\002/, "\\", cmd)
+            epoch = 0; have = 1; cursh = SHELL
+        } else if ($0 ~ /^  when: [0-9]+$/) {
+            epoch = substr($0, 9) + 0
+        }
+    } else {
+        flush()
+        epoch = 0; cmd = $0; have = 1; cursh = SHELL
+    }
+}
+END { flush() }
+' "${args[@]}" | sort -s -t $'\t' -k1,1n | awk -v RAW="${raw}" '
+BEGIN { FS = "\t" }
+{
+    cmd = $0
+    sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", cmd)
+    if (RAW != "") {
+        if (NR == RAW + 0) { gsub(/\001/, "\n", cmd); print cmd; exit }
+        next
+    }
+    ts = ($1 + 0 > 0) ? strftime("%F %T", $1 + 0) : "-"
+    gsub(/\001/, " | ", cmd)
+    printf "%6d  %-4s  %-19s  %s\n", NR, $3, ts, cmd
+}
+'
