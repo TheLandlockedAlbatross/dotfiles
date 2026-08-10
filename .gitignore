@@ -35,6 +35,9 @@
 !.config/xdg-desktop-portal/hyprland-portals.conf
 !.config/hypr/scripts/
 !.config/hypr/scripts/*
+!.config/wireplumber/
+!.config/wireplumber/wireplumber.conf.d/
+!.config/wireplumber/wireplumber.conf.d/bluetooth-a2dp-autoconnect.conf
 !.config/waybar/
 !.config/waybar/config.jsonc
 !.config/waybar/style.css
