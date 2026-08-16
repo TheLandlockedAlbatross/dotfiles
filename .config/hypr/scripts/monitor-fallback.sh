@@ -1,14 +1,13 @@
 #!/bin/bash
-# Ensure the primary display is enabled when all external displays disconnect.
-# - Checks on startup, after wake, and on monitor hot-unplug events.
-# - Auto-toggles workspace split based on active display count.
+# Ensure the primary display is enabled when all external displays disconnect,
+# and keep the workspace->monitor mapping in step with what is plugged in.
+# - Checks on startup, after wake, and on monitor hotplug events.
 #
 # Can be run standalone for a one-shot check (e.g. from hypridle after_sleep_cmd):
 #   monitor-fallback.sh check
 
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/scripts"
-SPLIT_STATE=/tmp/hypr-workspace-split
-SPLIT_SCRIPT="$CONF_DIR/workspace-split.sh"
+WS_MAP="$CONF_DIR/workspace-map.sh"
 
 # Load optional override for PRIMARY_DISPLAY.
 # shellcheck source=monitor-fallback.conf
@@ -16,9 +15,18 @@ SPLIT_SCRIPT="$CONF_DIR/workspace-split.sh"
 
 # Resolve primary display: use configured value, or auto-detect first eDP connector.
 # Retries up to 10s to handle cold-boot DRM initialization delays.
+#
+# Memoized, including a negative result: a desktop has no eDP at all, so every
+# call would otherwise pay the full 10s of retries for an answer that can never
+# change. The result lands in $PRIMARY rather than on stdout, because a caller
+# using $(resolve_primary) would run it in a subshell and throw the cache away.
+PRIMARY=""
+PRIMARY_RESOLVED=false
 resolve_primary() {
+  $PRIMARY_RESOLVED && return
+  PRIMARY_RESOLVED=true
   if [[ -n "$PRIMARY_DISPLAY" ]]; then
-    echo "$PRIMARY_DISPLAY"
+    PRIMARY="$PRIMARY_DISPLAY"
     return
   fi
   local attempts=20
@@ -27,7 +35,7 @@ resolve_primary() {
       [[ -f "$f" ]] || continue
       local dir
       dir=$(basename "$(dirname "$f")")
-      echo "${dir#card*-}"
+      PRIMARY="${dir#card*-}"
       return
     done
     sleep 0.5
@@ -48,7 +56,8 @@ any_external_connected() {
 
 check_monitors() {
   local primary
-  primary=$(resolve_primary)
+  resolve_primary
+  primary="$PRIMARY"
   if [[ -z "$primary" ]]; then
     logger -t monitor-fallback "WARNING: could not detect primary display"
     return 1
@@ -57,26 +66,31 @@ check_monitors() {
   if ! any_external_connected "$primary"; then
     hyprctl keyword monitor "$primary, preferred, auto, 2"
     swayosd-client --custom-icon video-display --custom-message "$primary enabled (no other displays)"
-    [[ -f "$SPLIT_STATE" ]] && "$SPLIT_SCRIPT" off
-  else
-    local active
-    active=$(hyprctl monitors -j | jq '[.[] | select(.disabled == false)] | length')
-    if (( active < 2 )) && [[ -f "$SPLIT_STATE" ]]; then
-      "$SPLIT_SCRIPT" off
-    elif (( active >= 2 )) && [[ ! -f "$SPLIT_STATE" ]]; then
-      "$SPLIT_SCRIPT" on
-    fi
   fi
+}
+
+# Re-resolve which display hosts each decade. Hyprland dumps the workspaces of
+# a departing display onto whichever monitor it connected first, which has
+# nothing to do with the layout, and it leaves the workspace rules pointing at
+# a connector that is no longer there. workspace-map.sh fixes both, and takes
+# its own lock, so a burst of events from a multi-head unplug serializes rather
+# than racing.
+remap_workspaces() {
+  [[ -x "$WS_MAP" ]] || return 0
+  "$WS_MAP" apply
 }
 
 # One-shot mode: run a single check and exit (used by hypridle after_sleep_cmd).
 # Retries up to 3 times to handle post-wake DRM/display settling.
 if [[ "$1" == "check" ]]; then
+  rc=1
   for attempt in 1 2 3; do
-    check_monitors && exit 0
+    if check_monitors; then rc=0; break; fi
     sleep 1
   done
-  exit 1
+  # Waking can bring displays back or leave them behind, so remap either way.
+  remap_workspaces
+  exit "$rc"
 fi
 
 # Daemon mode: check on startup, then listen for monitor events.
@@ -85,11 +99,17 @@ check_monitors
 
 while true; do
   socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | while read -r line; do
+    # Remap first: it is what the user sees, and check_monitors can spend up to
+    # 10s hunting for an eDP panel that a desktop does not have.
     if [[ "$line" == monitorremoved* ]]; then
       sleep 0.5
+      remap_workspaces
       check_monitors
     elif [[ "$line" == monitoradded* ]]; then
+      # Longer settle: Hyprland walks its own reconnect path first, moving the
+      # workspaces it stamped on unplug back to the returning display.
       sleep 1
+      remap_workspaces
       check_monitors
     fi
   done

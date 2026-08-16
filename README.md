@@ -1,57 +1,117 @@
 # About
-This is a collection of scripts, configuration files and assets that I want pretty much everywhere.
+
+Scripts, configuration files and assets that I want pretty much everywhere. `$HOME` itself is the git repo, and the repo spans several machines: the current Omarchy (Arch + Hyprland) desktops plus an older Debian i3/XFCE setup.
 
 Hopefully a never-ending work in progress.
 
+## New machine setup
+
+```
+<install git, git-crypt, git-lfs>
+cd $HOME
+<move old $HOME content elsewhere if you want to preserve it>
+git init
+git branch -m main
+git remote add origin https://github.com/TheLandlockedAlbatross/dotfiles/
+git fetch origin
+git checkout -b main origin/main
+git crypt unlock <path to symmetric key from an existing machine>
+```
+
+The git-crypt key never lives in the repo; copy it over a secure channel from a machine that already has it.
+
 ## Security
-Sensitive files or files that are useless for anybody but me are encrypted and prepended with encrypted_MEO (for My Eyes Only).
 
-This repo is designed so that `$HOME` itself is the git repo. To prevent accidentally tracking sensitive files, `.gitignore` ignores everything by default (`*`) and individual files and directories are allowlisted explicitly.
+To prevent accidentally tracking sensitive files, `.gitignore` ignores everything by default (`*`) and individual files and directories are allowlisted explicitly.
 
-## Details
+Files that are sensitive or useless to anybody but me are encrypted and prefixed `encrypted_MEO` (My Eyes Only). Small ones are encrypted transparently by git-crypt via `.gitattributes`; the large Firefox profile archives are encrypted with openssl before commit and stored through Git LFS. Firefox profiles are packed into archives so their internal paths stay private.
 
-### Base
-Built on [Omarchy](https://omarchy.com) (Arch + Hyprland). Everything below is what this repo adds or overrides on top of Omarchy defaults.
+## Layout
 
-### Hyprland
-- **Tight layout:** 4px inner gaps, 0 outer gaps, 1px border, subtle 2px rounding
-- **Solo window cleanup:** border hidden when only one tiled window on workspace
-- **Workspace toggle-back:** re-pressing Super+N on the current workspace toggles to the previous (non-empty) workspace
-- **Fast key repeat:** 300 rate / 500ms delay (vs Omarchy's 40/600)
-- **Idle timers:** 10min screensaver → 20min lock + DPMS off (vs Omarchy's 2.5min/5.5min)
+### Hyprland (`.config/hypr/`)
 
-### Scripts
-| Script | Description |
-|--------|-------------|
-| `workspace-switch.sh` | Workspace toggle-back — tracks previous workspace, ignores empty workspace visits |
-| `monitor-toggle.sh` | Enable/disable monitors via picker, persists to `monitors.conf` |
-| `monitor-picker.py` | Interactive GTK3 layer-shell monitor placement with arrow keys, scaling, edge snapping |
-| `monitor-configure.sh` | Reposition an already-active monitor interactively |
-| `mullvad-cycle.sh` | Distance-sorted Mullvad relay cycling (auto-detects home location via ipinfo.io) |
-| `mullvad-node-cycle.sh` | Cycle WireGuard nodes within current city |
-| `screensaver.sh` | Smart screensaver: auto-launches on single display, shows picker on multi-monitor |
-| `zfs-manager.sh` | Dual-pane TUI for ZFS pool/dataset/snapshot management |
-| `bw-backup-menu.sh` | Bitwarden vault backup (CLI export or GUI data.json copy) |
-| `swayosd-focused.sh` | SwayOSD wrapper that targets the focused monitor |
-| `theme-bg-prev.sh` | Cycle to previous wallpaper (complements Omarchy's next-only) |
+Everything here adds to or overrides Omarchy defaults: tight gaps and borders, workspace toggle-back on re-pressing the shortcut for the workspace you are already on, fast key repeat, flat-accel touchpad tuning, idle/lock timers reworked around Omarchy's system lock, optional per-workspace wallpapers.
 
-### Waybar
-Replaces several default modules with custom widgets:
+#### Keyboard layers
 
-- **Clock** — shows day-of-year, weeks remaining, week number
-- **Network** — real-time bandwidth, Mullvad VPN overlay (green=connected, red=disconnected), incognito mode toggle
-- **Power draw** — wattage with color scaling, CPU frequency in tooltip
-- **Screen temperature** — color-coded Kelvin display, scroll ±50K, click ±500K (snaps to nearest 500), swayosd notification
-- **Screen brightness** — scroll ±1%, click ±10% (snaps to nearest 10), middle-click toggles compact/expanded layout
-- **Poll rate** — configurable Waybar refresh interval (0.1s–60s)
+`input.conf` sets two stock xkb options: `caps:hyper` turns Caps Lock into a held Hyper/Mod3 modifier, and `compose:ralt` moves Compose to Right Alt. Neither key changes keycode; only the keysym and modifier attached to it change, so every application still agrees on which physical key was pressed.
 
-### Omarchy Extensions
-- **Menu overrides:** monitor toggle/configure, Mullvad VPN country picker with connect/disconnect, extended setup menu
-- **Theme hook:** auto-toggles waybar active-workspace icon based on theme preference
-- **Custom theme:** `ethereal-extended` — blue/purple space theme, color active workspace number instead of using default active icon, 12 additional backgrounds
+That buys a second modifier and gives four workspace layers of ten, one decade per display:
 
-### Keybindings (beyond Omarchy defaults)
-- **Display:** Super+F1/F2 brightness, Super+Alt+F1/F2 color temperature (all with OSD)
-- **Mullvad:** Super+M status, Super+Shift+M node cycle, Super+Alt+M relay cycle, Super+Ctrl+M incognito
-- **Utilities:** Super+Z ZFS manager, Super+Shift+C open hypr config in tmux+nvim+claude
-- **Apps:** Firefox profiles, Gemini/Grok per-profile, Signal, Obsidian, Typora, etc.
+| Layer | Workspaces |
+|-------|------------|
+| `Super` | 1-10 |
+| `Caps` | 11-20 |
+| `Super + Alt` | 21-30 |
+| `Super + Caps` | 31-40 |
+
+Adding `Shift` to any layer moves the focused window there instead of switching. Omarchy's digit-key defaults are relocated to keep the layers clear: `changegroupactive` to `Super + Ctrl`, `movetoworkspacesilent` to `Super + Ctrl + Shift`.
+
+Two consequences of the remap worth knowing:
+
+- Caps Lock no longer locks anything, anywhere, and its LED stays dark. The key is out of the Lock modifier map entirely.
+- Right Alt is Compose now, not Alt. Alt bindings, including the `Super + Alt` workspace layer, need the left Alt key.
+
+#### Displays and decades
+
+Each panel owns one decade for good. The pairing is recorded by panel identity rather than by connector, in `~/.local/state/hypr/workspace-map-slots`, so moving a cable to another port takes the decade with it.
+
+Unplug a display and only its own ten workspaces move, to the least loaded survivor, with ties going to the next panel clockwise. Nothing is renumbered and the other decades stay where they are, so `Caps + 3` is still workspace 13 with the same windows on it. Hyprland brings the workspaces home by itself when the panel comes back.
+
+Left alone it does not behave that way. Hyprland dumps the workspaces of a departing display onto whichever monitor it connected first, which has no relation to the layout, and leaves the workspace rules pointing at a connector that is no longer there. `workspace-map.sh` re-resolves the whole mapping on every hotplug event, driven by the listener in `monitor-fallback.sh`. Its `slots` command prints the current table, `plan` shows the rules it would write without applying them, and `reset` re-seeds the table from the layout in front of you.
+
+Nothing about it is specific to this machine: the layout order is computed from live geometry (rotated panels by their on-screen footprint, mirrors and disabled outputs skipped) and it works for any number of displays. The four decades come from the four digit-row layers `bindings.conf` binds, not from the hardware, so a machine with more displays than layers leaves the extras without a decade of their own and says so. Drop a `workspace-map.conf` next to the script setting `DECADES` to change that, and bind the matching layers.
+
+`scripts/` is the main toolbox. Each script documents itself in its header comment; by category:
+
+| Area | Scripts | What they do |
+|------|---------|--------------|
+| Monitors | `monitor-picker.py`, `monitor-toggle.sh`, `monitor-configure.sh`, `monitor-rotate.sh`, `monitor-fallback.sh` | Whole-layout editor on `F8` (drag, multi-select, live workspace info), enable/disable and reposition displays, DRM-based fallback when all displays disconnect |
+| VPN | `vpn-lib.sh`, `vpn-status.sh`, `vpn-cycle.sh`, `vpn-node-cycle.sh`, `vpn-disconnect.sh` | Provider-agnostic suite (currently Mullvad): distance-sorted relay cycling, per-city node cycling, status for waybar |
+| Workspaces | `workspace-switch.sh`, `workspace-map.sh`, `workspace-backgrounds.sh` | Toggle-back tracking, 10 workspaces per monitor for any display count with hotplug-stable decade ownership (`Super+E` cycles back to a two-display odd/even split), per-workspace wallpapers |
+| Utilities | `timer-menu.sh`, `screensaver.sh`, `free-keys.sh`, `keybinds-menu.sh`, `notify-focus-*.sh`, `swayosd-focused.sh`, `theme-bg-prev.sh`, `volume-osd-watch.sh`, `kb-color-cycle.sh`, `refresh-autoset.sh` | MPRIS timers, screensaver, keybinding viewers, notification-to-window focus jumping, OSD helpers, battery-aware refresh rate |
+
+Keybindings live in `bindings.conf`, so they are not duplicated here. At runtime `Super+K` lists all of them and `Super+Alt+K` only the custom ones, with a dot on any not yet committed to this repo. Both go through `keybinds-menu.sh`, which wraps Omarchy's own menu and fills in the modifier names Omarchy leaves as raw modmask numbers (its renderer knows only Super, Shift, Ctrl and Alt, so the whole Caps layer came out as `32 + 1`).
+
+### CLI tools (`.local/bin`)
+
+General-purpose commands on `PATH`, usable from any terminal and not tied to the Hyprland session (some also have keybindings):
+
+- `zfs-manager`: dual-pane ZFS TUI (`Super+Z`)
+- `sleep-inhibit`: keep-awake with natural-language durations (`Super+Ctrl+K`)
+- `bw-backup-menu`, `bw-backup-cli`, `bw-backup-gui`, `bw-backup-watcher`, `bw-vault-decrypt`: per-account Bitwarden vault backups with an offline decryption viewer (`Super+Shift+/`)
+
+Only these files are tracked; the rest of `.local/bin` stays local-only.
+
+### Waybar (`.config/waybar/`)
+
+Replaces several default modules with custom widgets: clock with day-of-year and weeks remaining, network with live bandwidth and VPN overlay plus incognito toggle, power draw with color scaling, battery, weather, screen temperature and brightness with fine-grained scroll steps (brightness can dim below the hardware minimum via gamma), and a configurable poll-rate menu.
+
+### Omarchy extensions (`.config/omarchy/`)
+
+Menu overrides (monitor tools, VPN picker, extended setup), theme hooks, and the `ethereal-extended` theme: blue/purple space theme with a colored active-workspace number and extra backgrounds.
+
+### Shell (`.zshrc`, `.zsh/`, `.bashrc`, `.bash/`, `.config/shell/`)
+
+- **zsh**: znap-managed plugins (auto-cloned on first run), a prompt chooser (none/p10k/starship) that persists its choice, and modular per-topic files in `.zsh/custom/` (fzf, history, editor, package managers, and so on) with an `x11/` split for X11-only bits.
+- **bash**: ports of the fzf and history customizations in `.bash/custom/`, sourced after Omarchy's defaults.
+- **`.config/shell/hist-merge`**: read-only merged history view across zsh, bash and fish, time-ordered and tagged by shell. The `h` command in both shells uses it; `HISTORY_MODE` and `HISTORY_SCOPE` env vars (with per-shell overrides) switch between merged/per-shell views and global/per-directory history files. It never writes to any history file.
+
+### mpv (`.config/mpv/`)
+
+uosc + thumbfast and other plugins, modular includes under `conf/` (including an isolated 4090 GPU profile), and extensive custom keybinds. `Ctrl+K` inside the player shows the key help.
+
+### Firefox (`.mozilla/`)
+
+Encrypted profile archives (see Security above), repacked as settings and userscripts change.
+
+### Older machines
+
+- `.config/i3/` and sxhkd: the previous Debian i3 setup, including fuzzy launcher helpers and default-program scripts.
+- `.config/xfce4/`: panel and xfconf state from the same machine.
+- `bin/`: bootstrap and utility scripts (`setup`, per-OS `setup-home`, nvim/tmux setup, LUKS drive setup, ZFS mirroring).
+- `system/`: files that belong outside `$HOME`, currently fonts and sounds for `/usr/share`.
+
+### Misc configs
+
+`ghostty`, `btop`, `flameshot`, `autostart`, `.Xmodmap` and friends: tracked as-is, no story to tell.
