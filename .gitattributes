@@ -1,3 +1,4 @@
 .mozilla/firefox/encrypted_MEO_firefox_config.tar.zst filter=git-crypt diff=git-crypt
 .mozilla/firefox/encrypted_MEO_my_profiles.txt filter=git-crypt diff=git-crypt
 .mozilla/firefox/encrypted_MEO_firefox_profiles.tar.zst filter=lfs diff=lfs merge=lfs -text
+.local/share/encrypted_MEO_who_setup.tar.zst filter=git-crypt diff=git-crypt
