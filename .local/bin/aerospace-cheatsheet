@@ -1,0 +1,43 @@
+#!/bin/bash
+# Fuzzy-searchable keybinding cheatsheet spanning every layer that can claim a
+# key: Karabiner, AeroSpace, kitty, nvim, zsh.
+#
+# AeroSpace rows come from the *running* config (`aerospace config --get`), so
+# they cannot drift out of date.
+#
+# Rows marked SHADOWED are bound by an app but swallowed first by AeroSpace or
+# Karabiner, which grab keys globally — i.e. that binding does not actually work.
+#
+# Bound to alt-shift-slash (alt+?) in ~/.aerospace.toml.
+
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+COLLECT="$(dirname "$0")/aerospace-cheatsheet-collect"
+
+command -v fzf >/dev/null || { echo "fzf not found. brew install fzf" >&2; read -r; exit 1; }
+
+# SOURCE  MODE  KEY  ACTION  FLAG  ->  aligned, colourised columns
+"$COLLECT" | sort -t$'\t' -k1,1 -k2,2 -k3,3 | awk -F'\t' '
+{
+  colour["aerospace"] = "\033[38;5;39m"
+  colour["karabiner"] = "\033[38;5;213m"
+  colour["kitty"]     = "\033[38;5;150m"
+  colour["nvim"]      = "\033[38;5;222m"
+  colour["zsh"]       = "\033[38;5;245m"
+  c = ($1 in colour) ? colour[$1] : ""
+  flag = ($5 == "SHADOWED") ? "\033[38;5;203m  ⚠ shadowed\033[0m" : ""
+  printf "%s%-10s\033[0m %-8s \033[1m%-22s\033[0m %s%s\n", c, $1, $2, $3, $4, flag
+}' | fzf \
+    --ansi \
+    --reverse \
+    --no-sort \
+    --border=rounded \
+    --border-label=" keybindings " \
+    --info=inline \
+    --prompt='  ' \
+    --pointer='▸' \
+    --height=100% \
+    --header=$'karabiner → aerospace → kitty → nvim → zsh   (outer layers win)\n⚠ shadowed = bound, but a global grabber eats it first\nesc / ctrl-c to close\n' \
+    --preview-window=hidden \
+  || true

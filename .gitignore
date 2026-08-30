@@ -115,3 +115,8 @@
 !.aerospace.toml
 !.config/sketchybar/
 !.config/sketchybar/**
+!.local/bin/
+!.local/bin/aerospace-cheatsheet
+!.local/bin/aerospace-cheatsheet-collect
+!.config/alacritty/
+!.config/alacritty/cheatsheet.toml

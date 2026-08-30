@@ -1,0 +1,17 @@
+# Dedicated config for the keybinding cheatsheet popup (alt-shift-slash).
+# Launched from ~/.aerospace.toml; NOT a general Alacritty config.
+#
+# window.title is static (dynamic_title = false) so AeroSpace's
+# on-window-detected rule matches it at creation time — no race, it floats
+# every time. window.level keeps it above all normal windows even unfocused.
+
+[window]
+title = "aerospace-cheatsheet"
+dynamic_title = false
+level = "AlwaysOnTop"
+dimensions = { columns = 110, lines = 32 }
+padding = { x = 10, y = 8 }
+opacity = 0.97
+
+[font]
+size = 13.0

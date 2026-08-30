@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Collect keybindings from every layer that can claim a key on this machine.
+
+Sources, in the order a keypress actually meets them:
+
+  karabiner  - remaps at the HID layer, before anything else sees the event
+  aerospace  - grabs registered hotkeys system-wide, before the focused app
+  kitty      - terminal-level maps, only inside kitty
+  nvim       - only inside nvim, and only if the layers above let the key through
+  zsh        - readline word-ops, only at a shell prompt
+
+AeroSpace bindings are read from the *running* config via the CLI, so this can
+never drift from reality the way a hand-maintained cheatsheet does.
+
+Emits TSV: SOURCE, MODE, KEY, ACTION, FLAG
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+AEROSPACE = "/opt/homebrew/bin/aerospace"
+
+
+def sh(cmd):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def canon(key):
+    """Normalise a key spec so the same chord from different sources matches."""
+    k = key.lower().strip()
+    k = k.replace("<", "").replace(">", "")
+    k = re.sub(r"\b(left_|right_)", "", k)
+    parts = [p for p in re.split(r"[-+]", k) if p]
+    if not parts:
+        return k
+    # The final component is the key itself; only what precedes it is a
+    # modifier. Without this, "<C-A>" (ctrl + the letter a) would read as
+    # ctrl+alt, and "alt-c" as alt+ctrl — colliding with each other.
+    mod_alias = {
+        "a": "alt", "m": "alt", "opt": "alt", "option": "alt", "meta": "alt",
+        "d": "cmd", "command": "cmd", "super": "cmd",
+        "c": "ctrl", "control": "ctrl",
+        "s": "shift",
+    }
+    key_alias = {
+        "return_or_enter": "enter", "cr": "enter", "return": "enter",
+        "esc": "escape", "spc": "space",
+    }
+    mods = {mod_alias.get(p, p) for p in parts[:-1]}
+    base = key_alias.get(parts[-1], parts[-1])
+    order = [m for m in ("ctrl", "alt", "shift", "cmd") if m in mods]
+    other = sorted(m for m in mods if m not in ("ctrl", "alt", "shift", "cmd"))
+    return "+".join(order + other + [base])
+
+
+rows = []
+
+
+# ---- AeroSpace (live running config) ----------------------------------------
+raw = sh([AEROSPACE, "config", "--get", "mode", "--json"])
+if raw:
+    try:
+        for mode, body in json.loads(raw).items():
+            for key, action in body.get("binding", {}).items():
+                rows.append(["aerospace", mode, key, action])
+    except json.JSONDecodeError:
+        pass
+
+
+# ---- Karabiner-Elements ------------------------------------------------------
+kpath = f"{HOME}/.config/karabiner/karabiner.json"
+if os.path.exists(kpath):
+    try:
+        with open(kpath) as fh:
+            prof = json.load(fh)["profiles"][0]
+        for rule in prof.get("complex_modifications", {}).get("rules", []):
+            desc = rule.get("description", "(no description)")
+            keys = []
+            for man in rule.get("manipulators", []):
+                frm = man.get("from", {})
+                kc = frm.get("key_code")
+                if not kc:
+                    continue
+                mods = frm.get("modifiers", {}).get("mandatory", [])
+                keys.append("-".join(list(mods) + [kc]))
+            shown = ", ".join(dict.fromkeys(keys)) or "(various)"
+            rows.append(["karabiner", "-", shown, desc])
+        for m in prof.get("simple_modifications", []):
+            rows.append(["karabiner", "simple",
+                         str(m.get("from", {}).get("key_code", "?")),
+                         "-> " + str(m.get("to", [{}])[0].get("key_code", "?"))])
+    except Exception:
+        pass
+
+
+# ---- kitty -------------------------------------------------------------------
+kitty_conf = f"{HOME}/.config/kitty/kitty.conf"
+if os.path.exists(kitty_conf):
+    with open(kitty_conf) as fh:
+        for line in fh:
+            m = re.match(r"\s*map\s+(\S+)\s+(.+)", line)
+            if m:
+                rows.append(["kitty", "-", m.group(1), m.group(2).strip()])
+
+
+# ---- neovim (user mappings only, not vendored plugins) -----------------------
+nvim_map = f"{HOME}/.config/nvim/lua/mappings.lua"
+if os.path.exists(nvim_map):
+    with open(nvim_map) as fh:
+        for line in fh:
+            m = re.search(r'keymap\.set\(\s*"([^"]+)"\s*,\s*"(<[^"]+>)"', line)
+            if m:
+                mode, key = m.group(1), m.group(2)
+                d = re.search(r'desc\s*=\s*"([^"]+)"', line)
+                rows.append(["nvim", mode, key,
+                             d.group(1) if d else "(no desc)"])
+
+
+# ---- zsh ---------------------------------------------------------------------
+zshrc = f"{HOME}/.zshrc"
+ESC = {
+    r"^\[\[1;3D": "alt-left", r"^\[\[1;3C": "alt-right",
+    r"^\[\[1;5D": "ctrl-left", r"^\[\[1;5C": "ctrl-right",
+    r"^\[\^\?": "alt-backspace", r"^\[d": "alt-d",
+    r"^\[OA": "up", r"^\[OB": "down",
+}
+if os.path.exists(zshrc):
+    with open(zshrc) as fh:
+        for line in fh:
+            m = re.match(r"\s*bindkey\s+'([^']+)'\s+(\S+)", line)
+            if m:
+                seq, widget = m.group(1), m.group(2)
+                pretty = seq
+                for pat, name in ESC.items():
+                    if re.fullmatch(pat.replace(r"\[", r"\["), re.escape(seq)) or \
+                       re.sub(r"\\", "", pat) == seq:
+                        pretty = name
+                        break
+                rows.append(["zsh", "-", pretty, widget])
+
+# readline defaults that AeroSpace could silently steal
+for k, v in [("alt-b", "backward-word"), ("alt-f", "forward-word"),
+             ("alt-t", "transpose-words"), ("alt-c", "capitalize-word"),
+             ("alt-l", "downcase-word"), ("alt-u", "upcase-word"),
+             ("alt-.", "insert-last-argument")]:
+    rows.append(["zsh", "default", k, v])
+
+
+# ---- shadow detection --------------------------------------------------------
+# Only bindings that are live *without first entering a mode* actually steal a
+# key from the apps below. That means AeroSpace's main mode and every Karabiner
+# rule. AeroSpace's service/apps/X modes require a prefix chord, so an `esc` or
+# `up` in service mode shadows nothing.
+GLOBAL = {"aerospace", "karabiner"}
+claimed = {
+    canon(key)
+    for src, mode, key, _ in rows
+    if src == "karabiner" or (src == "aerospace" and mode == "main")
+}
+
+out = []
+for src, mode, key, action in rows:
+    flag = ""
+    if src not in GLOBAL and canon(key) in claimed:
+        flag = "SHADOWED"
+    out.append("\t".join([src, mode, key, action.replace("\t", " "), flag]))
+
+sys.stdout.write("\n".join(out) + "\n")
