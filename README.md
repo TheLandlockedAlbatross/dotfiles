@@ -112,6 +112,16 @@ Encrypted profile archives (see Security above), repacked as settings and usersc
 - `bin/`: bootstrap and utility scripts (`setup`, per-OS `setup-home`, nvim/tmux setup, LUKS drive setup, ZFS mirroring).
 - `system/`: files that belong outside `$HOME`, currently fonts and sounds for `/usr/share`.
 
+### macOS (malvolio)
+
+The Mac runs AeroSpace + SketchyBar in place of a Linux WM. Files are tracked at their real `$HOME` paths, same as everywhere else; the packaged tools live under `macos/` because they install outside the repo (a root-owned helper, `~/Applications` app bundles).
+
+- `.aerospace.toml`: tiling config. Focus is on `cmd-alt-hjkl`; plain `alt-hjkl` is deliberately left unbound so nvim keeps its move-line maps.
+- `.config/sketchybar/`: transparent bar overlaying the empty center of the native menu bar (which stays visible), with AeroSpace workspace bubbles and a sudo/date/weather pill.
+- `.local/bin/aerospace-cheatsheet` + `-collect`, `.config/alacritty/cheatsheet.toml`: `alt-shift-slash` fuzzy cheatsheet over every layer that can claim a key, flagging bindings shadowed by a global grabber. Opens in an always-on-top floating Alacritty popup; Alacritty is installed for this alone.
+- `macos/sudo-toggle/`: password-gated switch that arms or disarms a NOPASSWD sudoers rule, with menu-bar state and a Spotlight launcher.
+- `macos/restic-backup/`: home-directory backups to the restic repo on puck; the app wrapper exists so the backup inherits a terminal's Full Disk Access.
+
 ### Misc configs
 
 `ghostty`, `btop`, `flameshot`, `autostart`, `.Xmodmap` and friends: tracked as-is, no story to tell.
