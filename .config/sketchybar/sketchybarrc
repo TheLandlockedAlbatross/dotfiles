@@ -1,0 +1,88 @@
+#!/bin/bash
+# topmost=on draws this transparent bar OVER the native menu bar, so the
+# center items look like part of it (app menus left and status icons right are
+# the real menu bar showing through).
+
+PLUGIN_DIR="$HOME/.config/sketchybar/plugins"
+
+# margin shrinks the bar window to the center ~960px of the screen: topmost=on
+# blocks clicks to the native menu bar UNDER the bar window, so the bar must
+# not cover the app menus (left) or status icons (right).
+sketchybar --bar \
+  position=top \
+  height=30 \
+  y_offset=0 \
+  margin=800 \
+  color=0x00000000 \
+  shadow=off \
+  sticky=on \
+  topmost=on \
+  padding_left=10 \
+  padding_right=10
+
+PILL="background.color=0x8c1c1c1e background.corner_radius=13 background.height=26 background.border_color=0x1affffff background.border_width=1"
+
+# Match the native menu bar typeface and size
+sketchybar --default \
+  icon.font=".SF NS:Regular:13.0" \
+  label.font=".SF NS:Regular:13.0" \
+  icon.color=0xffffffff \
+  label.color=0xffffffff \
+  icon.padding_left=12 \
+  icon.padding_right=5 \
+  label.padding_left=0 \
+  label.padding_right=12
+
+# --- AeroSpace workspaces: one item each, active bold, others dimmed ---------
+# Hidden unless focused or non-empty; updated by space.sh per item.
+sketchybar --add event aerospace_workspace_change
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  sketchybar --add item space.$i center \
+    --set space.$i \
+      icon.drawing=off \
+      drawing=off \
+      label="$i" \
+      label.padding_left=11 \
+      label.padding_right=11 \
+      update_freq=5 \
+      script="$PLUGIN_DIR/space.sh" \
+      click_script="/opt/homebrew/bin/aerospace workspace $i" \
+    --subscribe space.$i aerospace_workspace_change
+done
+sketchybar --add bracket spaces '/space\..*/' \
+  --set spaces $PILL
+
+# Spacer between the workspace pill and the widget pill (kept out of both
+# brackets so neither background stretches over it)
+sketchybar --add item gap center \
+  --set gap icon.drawing=off label.drawing=off width=14
+
+# --- sudo toggle: same state check + click action as the Übersicht widget ---
+sketchybar --add item sudo center \
+  --set sudo \
+    icon.font="Apple Color Emoji:Regular:16.0" \
+    update_freq=2 \
+    script="$PLUGIN_DIR/sudo.sh" \
+    click_script='open -a "Sudo Toggle"'
+
+# --- date + time: click opens Calendar.app ---
+sketchybar --add item cal center \
+  --set cal \
+    icon=📅 \
+    update_freq=1 \
+    script="$PLUGIN_DIR/cal.sh" \
+    click_script="open -a Calendar"
+
+# --- weather: wttr.in, refreshes every 30 min and on wake; click opens Weather.app ---
+sketchybar --add item weather center \
+  --set weather \
+    update_freq=1800 \
+    script="$PLUGIN_DIR/weather.sh" \
+    click_script="open -a Weather" \
+  --subscribe weather system_woke
+
+# Dark pill around the center trio
+sketchybar --add bracket widgets sudo cal weather \
+  --set widgets $PILL
+
+sketchybar --update
