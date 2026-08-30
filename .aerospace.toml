@@ -1,0 +1,208 @@
+# AeroSpace configuration
+#
+# Based on omerxx's config as filmed in "Aerospace Is Probably The Best MacOS
+# Tiling Manager I've Ever Used" (DevOps Toolbox, 2024-11-22), pinned to commit
+# 908fc04952 of github.com/omerxx/dotfiles — the version pushed the same day as
+# the video, not current HEAD (which has since moved to 350px per-monitor gaps
+# and borders width=0).
+#
+# Deviations from that config are marked  [DEVIATION]  with the reason.
+# Previous config backed up at ~/wm-backup-2026-08-16/configs/.aerospace.toml
+
+# [DEVIATION] omerxx runs sketchybar here. Not installed, so we start only
+# JankyBorders. His config also had an exec-on-workspace-change hook whose
+# 4th array element became bash's $0 rather than a second command, so its
+# `borders` call never actually ran. borders is a persistent daemon and only
+# needs starting once, so the hook isn't needed at all.
+# DISABLED pending confirmation: borders was the prime suspect for on-screen
+# glitching reported 2026-08-16. To re-enable, uncomment the line below (or run
+# it directly to test). A thinner width=2.0 flickers far less at 120Hz.
+after-startup-command = [
+  # 'exec-and-forget borders active_color=0xffe1e3e4 inactive_color=0xff494d64 width=5.0'
+]
+
+# SketchyBar installed 2026-08-16; notify it on workspace switch so the
+# indicator updates instantly. Exactly 3 array elements — a 4th becomes bash's
+# $0 (the bug described above).
+exec-on-workspace-change = ['/bin/bash', '-c',
+  '/opt/homebrew/bin/sketchybar --trigger aerospace_workspace_change FOCUSED_WORKSPACE=$AEROSPACE_FOCUSED_WORKSPACE'
+]
+
+# [DEVIATION] omerxx has this false. Kept true — it is how AeroSpace starts on
+# this machine (~/Library/LaunchAgents/bobko.aerospace.plist).
+start-at-login = true
+
+# Normalizations. See: https://nikitabobko.github.io/AeroSpace/guide#normalization
+enable-normalization-flatten-containers = true
+enable-normalization-opposite-orientation-for-nested-containers = true
+
+accordion-padding = 300
+
+# Possible values: tiles|accordion
+default-root-container-layout = 'tiles'
+
+# Possible values: horizontal|vertical|auto
+default-root-container-orientation = 'auto'
+
+# Mouse follows focus when focused monitor changes
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+
+# [DEVIATION] omerxx has this false. Kept true: Karabiner rules 10 and 11
+# disable cmd-h / cmd-opt-h-m, and this is the AeroSpace-side equivalent.
+# Leaving it false would quietly reintroduce accidental minimising.
+automatically-unhide-macos-hidden-apps = true
+
+[[on-window-detected]]
+if.app-name-regex-substring = 'finder'
+run = 'layout floating'
+
+# [DEVIATION] omerxx floats Telegram; not installed here. This rule floats the
+# keybinding cheatsheet window instead (~/.local/bin/aerospace-cheatsheet).
+[[on-window-detected]]
+if.window-title-regex-substring = 'aerospace-cheatsheet'
+run = 'layout floating'
+
+# Possible values: (qwerty|dvorak)
+[key-mapping]
+preset = 'qwerty'
+
+[gaps]
+inner.horizontal = 40
+inner.vertical =   40
+outer.left =       40
+outer.bottom =     40
+outer.top =        40
+outer.right =      80
+
+# 'main' binding mode declaration
+[mode.main.binding]
+
+# All possible modifiers: cmd, alt, ctrl, shift
+# All possible commands: https://nikitabobko.github.io/AeroSpace/commands
+
+alt-ctrl-shift-f = 'fullscreen'
+alt-ctrl-f = 'layout floating'
+
+alt-shift-left  = 'join-with left'
+alt-shift-down  = 'join-with down'
+alt-shift-up    = 'join-with up'
+alt-shift-right = 'join-with right'
+
+# See: https://nikitabobko.github.io/AeroSpace/commands#layout
+alt-slash = 'layout tiles horizontal vertical'
+alt-comma = 'layout accordion horizontal vertical'
+
+# --- Focus -------------------------------------------------------------------
+# [DEVIATION] omerxx uses alt-h/j/k/l. Moved to cmd-alt because
+# ~/.config/nvim/lua/mappings.lua binds <A-j>/<A-k> to move-line-up/down, and
+# AeroSpace grabs alt-j/alt-k globally before any terminal sees them — which had
+# silently broken that nvim mapping. Also frees alt-l for readline downcase-word.
+cmd-alt-h = 'focus left'
+cmd-alt-j = 'focus down'
+cmd-alt-k = 'focus up'
+cmd-alt-l = 'focus right'
+
+# --- Move --------------------------------------------------------------------
+# Left on omerxx's alt-shift: these do not collide with nvim (which uses plain
+# alt) or with any zsh binding.
+alt-shift-h = 'move left'
+alt-shift-j = 'move down'
+alt-shift-k = 'move up'
+alt-shift-l = 'move right'
+
+# See: https://nikitabobko.github.io/AeroSpace/commands#resize
+alt-shift-minus = 'resize smart -50'
+alt-shift-equal = 'resize smart +50'
+
+# --- Workspaces --------------------------------------------------------------
+# [DEVIATION] omerxx binds 1-4. Kept 10 to match existing muscle memory, but
+# adopted his --focus-follows-window flag on the move bindings. The old
+# workspaces 11-20 are dropped: they were force-assigned to a monitor named
+# 'secondary' that does not exist on this single-monitor machine.
+alt-1 = 'workspace 1'
+alt-2 = 'workspace 2'
+alt-3 = 'workspace 3'
+alt-4 = 'workspace 4'
+alt-5 = 'workspace 5'
+alt-6 = 'workspace 6'
+alt-7 = 'workspace 7'
+alt-8 = 'workspace 8'
+alt-9 = 'workspace 9'
+alt-0 = 'workspace 10'
+
+alt-shift-1 = 'move-node-to-workspace 1 --focus-follows-window'
+alt-shift-2 = 'move-node-to-workspace 2 --focus-follows-window'
+alt-shift-3 = 'move-node-to-workspace 3 --focus-follows-window'
+alt-shift-4 = 'move-node-to-workspace 4 --focus-follows-window'
+alt-shift-5 = 'move-node-to-workspace 5 --focus-follows-window'
+alt-shift-6 = 'move-node-to-workspace 6 --focus-follows-window'
+alt-shift-7 = 'move-node-to-workspace 7 --focus-follows-window'
+alt-shift-8 = 'move-node-to-workspace 8 --focus-follows-window'
+alt-shift-9 = 'move-node-to-workspace 9 --focus-follows-window'
+alt-shift-0 = 'move-node-to-workspace 10 --focus-follows-window'
+
+alt-tab = 'workspace-back-and-forth'
+alt-shift-tab = 'move-workspace-to-monitor --wrap-around next'
+
+# --- Modes -------------------------------------------------------------------
+alt-shift-semicolon = 'mode service'
+alt-shift-enter = 'mode apps'
+
+# [FIX] This line previously sat *below* the
+# [workspace-to-monitor-force-assignment] table, so TOML absorbed it into that
+# table as workspace "cmd-semicolon" -> monitor "mode X". It was never a
+# keybinding, and mode X was unreachable. Now declared before any table header.
+cmd-semicolon = 'mode X'
+
+# Keybinding cheatsheet — fuzzy-searchable, reads the live running config.
+# Runs in Alacritty (not wezterm): its window.level=AlwaysOnTop keeps the popup
+# above everything, and its static window.title matches the on-window-detected
+# float rule at creation time (wezterm set the title late, so it raced the rule
+# and sometimes tiled).
+alt-shift-slash = 'exec-and-forget /opt/homebrew/bin/alacritty --config-file /Users/adamcamilli/.config/alacritty/cheatsheet.toml -e /Users/adamcamilli/.local/bin/aerospace-cheatsheet'
+
+# --- App launchers -----------------------------------------------------------
+# [DEVIATION] omerxx launches Telegram/Arc/Obsidian/Ghostty, none of which are
+# installed here; remapped by role onto installed apps.
+# Deliberately avoids alt-d, alt-b, alt-f and alt-backspace, which are readline
+# word-operations bound in ~/.zshrc and would be swallowed globally.
+# Note: alt-c shadows readline capitalize-word inside terminals.
+alt-g = 'exec-and-forget open -n /Applications/WezTerm.app'                    # terminal   (was kitty, removed)
+alt-a = 'exec-and-forget open -a /Applications/Firefox.app'                    # browser    (was Arc)
+alt-s = 'exec-and-forget open -a /Applications/Safari.app'                     # browser    (unchanged)
+alt-v = 'exec-and-forget open -a "/Applications/Visual Studio Code.app"'       # editor
+alt-c = 'exec-and-forget open -a /Applications/Claude.app'                     # notes      (was Obsidian)
+alt-o = 'exec-and-forget open -a /Applications/OBS.app'
+alt-q = 'exec-and-forget open -a "/System/Applications/QuickTime Player.app"'  # unchanged
+
+# cmd+return -> WezTerm. Previously left to Karabiner-Elements, but Karabiner
+# never grabs this keyboard (only the G502 mouse appears as "grabbed" in its
+# log), so none of its rules have ever fired. Bound here instead, where the
+# handler demonstrably works. No double-fire risk while Karabiner is inert.
+cmd-enter = 'exec-and-forget open -n /Applications/WezTerm.app'                # terminal
+
+# 'service' binding mode declaration.
+[mode.service.binding]
+esc = ['reload-config', 'mode main']
+r = ['flatten-workspace-tree', 'mode main'] # reset layout
+f = ['layout floating tiling', 'mode main'] # Toggle between floating and tiling layout
+backspace = ['close-all-windows-but-current', 'mode main']
+
+alt-shift-h = ['join-with left', 'mode main']
+alt-shift-j = ['join-with down', 'mode main']
+alt-shift-k = ['join-with up', 'mode main']
+alt-shift-l = ['join-with right', 'mode main']
+
+# Preserved from the previous config.
+down = 'volume down'
+up = 'volume up'
+shift-down = ['volume set 0', 'mode main']
+
+[mode.apps.binding]
+alt-w = ['exec-and-forget open -a /Applications/WezTerm.app', 'mode main']
+esc = 'mode main'
+
+# A mode to just pass keys through!
+[mode.X.binding]
+cmd-semicolon = 'mode main'
+esc = 'mode main'

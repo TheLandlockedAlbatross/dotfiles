@@ -111,3 +111,5 @@
 !.local/
 !.local/share/
 !.local/share/encrypted_MEO_who_setup.tar.zst
+# malvolio (macOS) additions
+!.aerospace.toml
