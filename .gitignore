@@ -123,3 +123,5 @@
 !macos/
 !macos/sudo-toggle/
 !macos/sudo-toggle/**
+!macos/restic-backup/
+!macos/restic-backup/**

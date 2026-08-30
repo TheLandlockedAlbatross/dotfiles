@@ -1,0 +1,6 @@
+#!/bin/bash
+# Open a new WezTerm window running the home backup, so restic's progress is
+# visible while it works. Same pattern as Sudo Toggle.app.
+res="$(cd "$(dirname "$0")/../Resources" && pwd)"
+exec /usr/bin/open -na /Applications/WezTerm.app --args \
+  start --always-new-process -- /bin/bash "$res/backup-interactive.sh"

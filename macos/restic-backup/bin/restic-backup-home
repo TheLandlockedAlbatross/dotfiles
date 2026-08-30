@@ -1,0 +1,36 @@
+#!/bin/bash
+# Back up the home directory to the Malvolio restic repo on puck.
+# User-level; no sudo required. Installed at ~/.local/bin/restic-backup-home.
+# Streams restic's progress to the terminal, logs the full output to
+# ~/.local/state/restic-backup/last-run.log, and ends with one status line
+# containing the new snapshot ID.
+set -u
+
+repo=sftp:puck:/mnt/zfs/AOC-Backups-12TB-1/restic/Malvolio
+passfile=$HOME/.config/restic/malvolio.pass
+excludes=$HOME/.config/restic/excludes-home.txt
+logdir=$HOME/.local/state/restic-backup
+log=$logdir/last-run.log
+
+mkdir -p "$logdir"
+
+restic -r "$repo" backup "$HOME" \
+    --password-file "$passfile" \
+    --exclude-caches \
+    --exclude-file "$excludes" \
+    --tag home 2>&1 | tee "$log"
+rc=${PIPESTATUS[0]}
+
+# restic prints "snapshot <id> saved" on success; exit 3 means the snapshot
+# was created but some files were unreadable (normal on macOS: TCC-protected
+# ~/Library paths), which we treat as success.
+snap=$(sed -n 's/^snapshot \([0-9a-f]*\) saved$/\1/p' "$log" | tail -1)
+
+if [ "$rc" -eq 0 ] && [ -n "$snap" ]; then
+    echo "backup OK: snapshot $snap"
+elif [ "$rc" -eq 3 ] && [ -n "$snap" ]; then
+    echo "backup OK (some files unreadable, see $log): snapshot $snap"
+else
+    echo "backup FAILED (restic exit $rc), see $log"
+    exit 1
+fi
