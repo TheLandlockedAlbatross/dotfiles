@@ -1,0 +1,28 @@
+#!/bin/bash
+# Toggle a NOPASSWD-ALL sudoers rule for the invoking user on or off.
+# Installed at /usr/local/sbin/sudo-toggle (root:wheel, 0755); run via sudo.
+# Prints "on", "off", or "error".
+set -eu
+
+sudoers_file=/etc/sudoers.d/sudo-nopasswd
+user=${SUDO_USER:-$(id -un)}
+
+if [ -f "$sudoers_file" ]; then
+    rm -f "$sudoers_file"
+    echo off
+    exit 0
+fi
+
+# Write to a temp file and validate before putting it in place, so a bad rule
+# can never leave sudo unusable.
+tmp=$(mktemp)
+printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$user" > "$tmp"
+if visudo -cf "$tmp" >/dev/null 2>&1; then
+    install -o root -g wheel -m 440 "$tmp" "$sudoers_file"
+    rm -f "$tmp"
+    echo on
+else
+    rm -f "$tmp"
+    echo error
+    exit 1
+fi

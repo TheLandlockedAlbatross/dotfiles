@@ -120,3 +120,6 @@
 !.local/bin/aerospace-cheatsheet-collect
 !.config/alacritty/
 !.config/alacritty/cheatsheet.toml
+!macos/
+!macos/sudo-toggle/
+!macos/sudo-toggle/**

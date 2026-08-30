@@ -1,0 +1,6 @@
+#!/bin/bash
+# Open a new WezTerm window running the interactive toggle, so the sudo
+# password prompt lands in a terminal the window manager will focus.
+res="$(cd "$(dirname "$0")/../Resources" && pwd)"
+exec /usr/bin/open -na /Applications/WezTerm.app --args \
+  start --always-new-process -- /bin/bash "$res/toggle-interactive.sh"

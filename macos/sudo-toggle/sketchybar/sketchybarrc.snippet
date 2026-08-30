@@ -1,0 +1,8 @@
+# Add an item like this to your sketchybarrc. PLUGIN_DIR should point at the
+# directory holding sudo.sh (installed to ~/.config/sketchybar/plugins by
+# install.sh). Adjust position and bracket to taste.
+sketchybar --add item sudo center \
+  --set sudo \
+    update_freq=2 \
+    script="$PLUGIN_DIR/sudo.sh" \
+    click_script='open -a "Sudo Toggle"'
