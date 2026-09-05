@@ -3,7 +3,7 @@
 # Idle-triggered screensaver is handled by the default omarchy-launch-screensaver.
 
 # Exit early if we don't have tte
-command -v tte &>/dev/null || exit 1
+command -v ttfx &>/dev/null || exit 1
 
 # Exit early if screensaver is already running
 pgrep -f org.omarchy.screensaver && exit 0
