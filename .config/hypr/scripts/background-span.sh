@@ -43,7 +43,7 @@ render_slices() {
   [[ -f $SLICE_DIR/signature ]] && sig_old=$(cat "$SLICE_DIR/signature")
   [[ "$sig_new" == "$sig_old" ]] && return 0
 
-  rm -f "$SLICE_DIR"/*.png
+  rm -f "$SLICE_DIR"/*.png "$SLICE_DIR"/*.jpg
   # Bounding box of all monitors in logical (layout) pixels
   local minx=999999 miny=999999 maxx=0 maxy=0
   local name x y lw lh pw ph
@@ -56,11 +56,23 @@ render_slices() {
   local bw=$((maxx - minx)) bh=$((maxy - miny))
   (( bw > 0 && bh > 0 )) || return 1
 
+  # One magick invocation, crops taken in SOURCE pixel space (each monitor's
+  # share of the stretched image maps back to a source rect), so the image is
+  # decoded once and interpolated once per slice. JPEG output: swaybg reads it
+  # via gdk-pixbuf and it encodes an order of magnitude faster than PNG.
+  local sw sh
+  read -r sw sh < <(magick identify -format "%w %h" "$img")   # no trailing \n: read exits 1 but fills vars
+  [[ $sw =~ ^[0-9]+$ && $sh =~ ^[0-9]+$ ]] || return 1
+  local args=()
   while read -r name x y lw lh pw ph; do
-    magick "$img" -resize "${bw}x${bh}!" \
-      -crop "${lw}x${lh}+$((x - minx))+$((y - miny))" +repage \
-      -resize "${pw}x${ph}!" "$SLICE_DIR/$name.png" || return 1
+    read -r cx cy cw ch < <(awk -v sw="$sw" -v sh="$sh" -v bw="$bw" -v bh="$bh" \
+      -v x="$((x - minx))" -v y="$((y - miny))" -v w="$lw" -v h="$lh" 'BEGIN {
+        printf "%d %d %d %d", int(x/bw*sw + 0.5), int(y/bh*sh + 0.5),
+          int(w/bw*sw + 0.5), int(h/bh*sh + 0.5) }')
+    args+=( \( +clone -crop "${cw}x${ch}+${cx}+${cy}" +repage \
+      -resize "${pw}x${ph}!" -quality 92 -write "$SLICE_DIR/$name.jpg" +delete \) )
   done < <(monitor_geometry)
+  magick "$img" "${args[@]}" null: || return 1
   printf '%s' "$sig_new" > "$SLICE_DIR/signature"
 }
 
@@ -106,7 +118,7 @@ paint_span_only() {
   sleep 0.4
   local name rest
   while read -r name rest; do
-    setsid uwsm-app -- swaybg -o "$name" -i "$SLICE_DIR/$name.png" -m stretch >/dev/null 2>&1 &
+    setsid uwsm-app -- swaybg -o "$name" -i "$SLICE_DIR/$name.jpg" -m stretch >/dev/null 2>&1 &
   done < <(monitor_geometry)
 }
 
