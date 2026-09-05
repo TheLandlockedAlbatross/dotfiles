@@ -19,7 +19,7 @@ for n in 00 01; do
   printf 'not really a jpeg\n' > "$HOME/.config/omarchy/current/theme/backgrounds/$n.jpg"
 done
 
-STATE_FILE="$HOME/.local/state/omarchy/toggles/workspace-backgrounds"
+STATE_FILE="$HOME/.local/state/workspace-backgrounds-on"
 LAYOUT_DIR="$HOME/.config/omarchy/background-layouts/images"
 EXTRA_FILE="$BG_TMP/hypr-bg-extra-images"
 ARRANGE_FILE="$BG_TMP/hypr-bg-arrangement"

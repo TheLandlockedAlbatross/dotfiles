@@ -30,7 +30,7 @@ from bglayout.geometry import compute_slices  # noqa: E402
 WS_BG_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "workspace-backgrounds.sh")
 TOGGLE_FILE = os.path.expanduser(
-    "~/.local/state/omarchy/toggles/workspace-backgrounds")
+    "~/.local/state/workspace-backgrounds-on")
 
 
 def repaint():

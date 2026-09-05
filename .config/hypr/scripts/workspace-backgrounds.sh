@@ -15,7 +15,7 @@
 #   paint-arrangement — repaint the locked arrangement at full resolution
 
 BG_TMP="${BG_TMP:-/tmp}"
-STATE_FILE=~/.local/state/omarchy/toggles/workspace-backgrounds
+STATE_FILE=~/.local/state/workspace-backgrounds-on
 CACHE_FILE="$BG_TMP/hypr-workspace-bg-map"
 FRAME_DUR_FILE="$BG_TMP/hypr-workspace-bg-framedur"
 CONF_FILE="$HOME/.config/omarchy/workspace-backgrounds.conf"

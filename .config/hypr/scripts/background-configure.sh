@@ -9,7 +9,7 @@
 # the feature switched on first — which discards customizations, so the toggle
 # does the warning rather than this script doing it silently.
 
-STATE_FILE=~/.local/state/omarchy/toggles/workspace-backgrounds
+STATE_FILE=~/.local/state/workspace-backgrounds-on
 LOCK_MARK=/tmp/hypr-bg-locked
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
