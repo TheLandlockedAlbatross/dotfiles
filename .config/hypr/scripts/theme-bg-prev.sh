@@ -2,12 +2,20 @@
 
 # Cycles to the previous background image
 
-THEME_NAME=$(cat "$HOME/.config/omarchy/current/theme.name" 2>/dev/null)
-THEME_BACKGROUNDS_PATH="$HOME/.config/omarchy/current/theme/backgrounds/"
+# v4 state paths (not the ~/.config/omarchy/current compat symlink: the
+# background link resolves through ~/.local/state, and the index lookup
+# below must compare identical path spellings). Filter and order match
+# omarchy-theme-bg-next so next/prev walk the same list.
+THEME_NAME=$(cat "$HOME/.local/state/omarchy/current/theme.name" 2>/dev/null)
+THEME_BACKGROUNDS_PATH="$HOME/.local/state/omarchy/current/theme/backgrounds/"
 USER_BACKGROUNDS_PATH="$HOME/.config/omarchy/backgrounds/$THEME_NAME/"
-CURRENT_BACKGROUND_LINK="$HOME/.config/omarchy/current/background"
+CURRENT_BACKGROUND_LINK="$HOME/.local/state/omarchy/current/background"
 
-mapfile -d '' -t BACKGROUNDS < <(find -L "$USER_BACKGROUNDS_PATH" "$THEME_BACKGROUNDS_PATH" -maxdepth 1 -type f -print0 2>/dev/null | sort -z)
+mapfile -d '' -t BACKGROUNDS < <(
+  find -L "$USER_BACKGROUNDS_PATH" "$THEME_BACKGROUNDS_PATH" -maxdepth 1 -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.bmp' -o -iname '*.webp' \) \
+    -print0 2>/dev/null | sort -z
+)
 TOTAL=${#BACKGROUNDS[@]}
 
 if (( TOTAL == 0 )); then

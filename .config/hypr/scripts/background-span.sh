@@ -101,7 +101,9 @@ cmd_watch() {
 paint_span_only() {
   render_slices || return 1
   pkill -x swaybg 2>/dev/null
-  sleep 0.1
+  # uwsm-app spawns are async via its daemon: give any in-flight swaybg from a
+  # previous paint time to land before ours so the kill above stays complete.
+  sleep 0.4
   local name rest
   while read -r name rest; do
     setsid uwsm-app -- swaybg -o "$name" -i "$SLICE_DIR/$name.png" -m stretch >/dev/null 2>&1 &
@@ -118,6 +120,7 @@ paint() {
     # No swaybg: the omarchy shell's background service draws the wallpaper
     # and follows omarchy-theme-bg-set on its own.
     pkill -x swaybg 2>/dev/null
+    return 0
   fi
 }
 
