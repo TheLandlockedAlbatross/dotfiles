@@ -142,7 +142,11 @@
 !.local/bin/bw-backup-menu
 !.local/bin/bw-backup-watcher
 !.local/bin/bw-vault-decrypt
+!.local/bin/seal
+!.local/bin/unseal
 # omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts
+!.local/bin/walker
+!.local/bin/omarchy-toggle-waybar
 !.local/bin/omarchy-launch-audio
 !.local/bin/omarchy-launch-bluetooth
 !.local/bin/omarchy-launch-walker

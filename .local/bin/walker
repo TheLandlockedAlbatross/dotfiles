@@ -1,0 +1,30 @@
+#!/bin/bash
+# Compatibility shim: walker was retired in omarchy 4 (quattro). Translates
+# walker's dmenu interface to omarchy-menu-select, which renders through the
+# omarchy shell, so pre-quattro scripts keep working unmodified. A bare
+# invocation opens the shell's app launcher like walker's default mode did.
+# If a real walker is ever reinstalled to /usr/bin it wins on PATH order.
+dmenu=0 prompt="Select" width="" maxheight=""
+while (( $# )); do
+  case "$1" in
+    --dmenu|-d) dmenu=1 ;;
+    -p|--prompt) prompt="${2%…}"; shift ;;
+    --width) width="$2"; shift ;;
+    --height|--maxheight) maxheight="$2"; shift ;;
+    --minheight) shift ;;
+    --nosearch|--forceprint) ;;
+    -q|--quit) exit 0 ;;
+  esac
+  shift
+done
+if (( ! dmenu )); then
+  exec omarchy-menu toggle apps
+fi
+args=()
+[[ -n $width ]] && args+=(--width "$width")
+[[ -n $maxheight ]] && args+=(--maxheight "$maxheight")
+if (( ${#args[@]} )); then
+  exec omarchy-menu-select "$prompt" -- "${args[@]}"
+else
+  exec omarchy-menu-select "$prompt"
+fi
