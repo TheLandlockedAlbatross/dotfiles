@@ -76,11 +76,8 @@ render_slices() {
   printf '%s' "$sig_new" > "$SLICE_DIR/signature"
 }
 
-watcher_running() {
-  local pid
-  pid=$(cat "$WATCH_PID_FILE" 2>/dev/null) || return 1
-  [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
-}
+WATCH_LOCK="$SLICE_DIR/watch.lock"
+PAINT_LOCK="$SLICE_DIR/paint.lock"
 
 stop_watcher() {
   local pid
@@ -90,8 +87,9 @@ stop_watcher() {
 }
 
 start_watcher() {
-  watcher_running && return 0
   mkdir -p "$SLICE_DIR"
+  # cmd_watch takes an exclusive flock; a second watcher exits immediately,
+  # so blind-starting here can never stack watchers.
   setsid "$0" watch >/dev/null 2>&1 < /dev/null &
   disown 2>/dev/null
 }
@@ -99,38 +97,60 @@ start_watcher() {
 # Watch the current-state dir: theme/background switches replace the
 # `background` symlink there. Re-paint on change; exit when span mode ends.
 cmd_watch() {
+  mkdir -p "$SLICE_DIR"
+  exec 9>"$WATCH_LOCK"
+  flock -n 9 || exit 0          # singleton: another watcher already runs
   echo $$ > "$WATCH_PID_FILE"
   while span_on && ! individual_on; do
     inotifywait -qq -t 300 -e create -e moved_to -e delete -e attrib "$CURRENT_DIR" 2>/dev/null
     span_on || break
     individual_on && break
-    sleep 0.3   # let the link settle
+    sleep 0.4   # let the link settle and coalesce the create/rename burst
     paint_span_only
   done
   rm -f "$WATCH_PID_FILE"
 }
 
+# awww updates each output in place: no swaybg kill/respawn churn, so there is
+# no window where the wallpaper falls back to the shell's per-display fill and
+# no flicker inviting double keypresses. Serialized under a paint lock so
+# overlapping triggers queue instead of interleaving.
 paint_span_only() {
-  render_slices || return 1
-  pkill -x swaybg 2>/dev/null
-  # uwsm-app spawns are async via its daemon: give any in-flight swaybg from a
-  # previous paint time to land before ours so the kill above stays complete.
-  sleep 0.4
-  local name rest
-  while read -r name rest; do
-    setsid uwsm-app -- swaybg -o "$name" -i "$SLICE_DIR/$name.jpg" -m stretch >/dev/null 2>&1 &
-  done < <(monitor_geometry)
+  mkdir -p "$SLICE_DIR"
+  (
+    # Bounded wait: a leaked/stuck lock degrades to a skipped paint, never a
+    # pileup of blocked painters.
+    flock -w 10 8 || exit 1
+    span_on || exit 0
+    individual_on && exit 0
+    render_slices || exit 1
+    pkill -x swaybg 2>/dev/null   # clear any legacy fill instances
+    if ! pgrep -x awww-daemon >/dev/null; then
+      # 8>&- : the daemon must NOT inherit the paint lock fd, or it holds the
+      # lock for life and every later paint times out.
+      setsid uwsm-app -- awww-daemon >/dev/null 2>&1 8>&- &
+      for _ in $(seq 1 30); do
+        awww query >/dev/null 2>&1 && break
+        sleep 0.1
+      done
+    fi
+    local name rest
+    while read -r name rest; do
+      awww img -o "$name" "$SLICE_DIR/$name.jpg" --transition-type none 2>/dev/null
+    done < <(monitor_geometry)
+  ) 8>"$PAINT_LOCK"
 }
 
 paint() {
-  # Individual backgrounds own the wallpaper; never fight awww.
+  # Individual backgrounds own the wallpaper; never fight its awww instance.
   if individual_on; then stop_watcher; return 0; fi
   if span_on; then
     paint_span_only && start_watcher
   else
     stop_watcher
-    # No swaybg: the omarchy shell's background service draws the wallpaper
-    # and follows omarchy-theme-bg-set on its own.
+    # Nothing of ours: the omarchy shell's background service draws the
+    # wallpaper and follows omarchy-theme-bg-set on its own.
+    pkill -x awww-daemon 2>/dev/null
     pkill -x swaybg 2>/dev/null
     return 0
   fi
