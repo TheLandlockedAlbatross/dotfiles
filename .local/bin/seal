@@ -1,0 +1,399 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# seal / unseal — encrypted, compressed folder archiving (tar | zstd | age).
+# One script, two modes: dispatches on the name it was invoked as ("unseal" is
+# a symlink to "seal"). Prompts follow omarchy conventions (gum), progress is
+# a pv-driven bar, and everything promptable can instead come from flags or a
+# key=value config file for scripted use. Run with --help for details.
+
+MODE="$(basename "$0")"
+[[ "$MODE" == "unseal" ]] || MODE="seal"
+
+C_CYAN=$'\e[36m'; C_GREEN=$'\e[32m'; C_RED=$'\e[31m'; C_YELLOW=$'\e[33m'
+C_GRAY=$'\e[90m'; C_BOLD=$'\e[1m'; C_OFF=$'\e[0m'
+
+VERBOSITY=1          # 0 quiet, 1 normal, 2 verbose, 3 trace
+ASSUME_YES=false
+FORCE=false
+DELETE_ORIG=""       # seal: delete original after (yes/no)
+RM_ARCHIVE=false     # unseal: delete archive after
+ARCHIVE=""           # seal: output name / unseal: input archive
+LEVEL=""
+EXTRA_RAW=""
+PASSFILE=""
+PASSPHRASE=""
+CONFIG=""
+DEST=""
+TARGET=""
+
+INTERACTIVE=false
+[[ -t 0 && -t 2 ]] && INTERACTIVE=true
+HAVE_GUM=false
+command -v gum &>/dev/null && HAVE_GUM=true
+
+die() { printf '%sError:%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
+msg() { local lvl="$1"; shift; (( VERBOSITY >= lvl )) && printf '%s\n' "$*" >&2 || true; }
+
+# ---------------------------------------------------------------- help ------
+show_help() {
+    local title body
+    if [[ "$MODE" == "seal" ]]; then
+        title="seal — hide a folder inside an encrypted archive"
+        body="$(cat <<EOF
+${C_BOLD}Usage${C_OFF}
+  seal [options] <file-or-directory>
+
+Compresses the target with zstd and encrypts it with age (scrypt passphrase,
+authenticated encryption) into ${C_CYAN}<name>.tar.zst.age${C_OFF}. Anything not supplied by
+flags or config is asked interactively. Restore with ${C_CYAN}unseal <archive>${C_OFF}.
+
+${C_BOLD}Options${C_OFF}
+  -n, --name NAME       archive filename        (default: <target>.tar.zst.age)
+  -l, --level N         zstd level 1-22         (default: 10; >19 adds --ultra)
+  -d, --delete          delete original after sealing      (default: keep)
+  -x, --extra "ARGS"    extra zstd arguments, e.g. "--long"
+  -f, --force           overwrite an existing archive without asking
+  -p, --pass-file FILE  read passphrase from the first line of FILE
+  -P, --passphrase STR  passphrase as argument  (visible in ps; prefer -p)
+  -c, --config FILE     load defaults from a key=value file (see below)
+  -y, --yes             no prompts; use defaults for anything not specified
+  -q, --quiet           errors only; implies --yes, no progress bar
+  -v, --verbose         more detail (-vv adds a shell trace)
+  -h, --help            this help
+
+${C_BOLD}Config file${C_OFF} (key=value, # comments; flags override it)
+  name=backup.tar.zst.age
+  level=15
+  delete=no
+  extra=--long
+  passfile=/path/to/passphrase.txt
+
+${C_BOLD}Examples${C_OFF}
+  seal X/                                fully prompt-driven
+  seal -l 19 -d X/                       level 19, delete original, prompts rest
+  seal -q -c job.conf -p pass.txt X/     fully scripted, silent
+
+An empty passphrase at the prompt autogenerates a strong one and prints it.
+EOF
+)"
+    else
+        title="unseal — restore an archive made by seal"
+        body="$(cat <<EOF
+${C_BOLD}Usage${C_OFF}
+  unseal [options] <archive.tar.zst.age> [dest-dir]
+
+Decrypts and unpacks into ${C_CYAN}dest-dir${C_OFF} (default: current directory). Extraction
+goes through a temp dir first and refuses to overwrite anything that exists.
+
+${C_BOLD}Options${C_OFF}
+  -r, --rm              delete the archive after successful extraction
+  -p, --pass-file FILE  read passphrase from the first line of FILE
+  -P, --passphrase STR  passphrase as argument  (visible in ps; prefer -p)
+  -c, --config FILE     load defaults from a key=value file (see below)
+  -q, --quiet           errors only; no progress bar
+  -v, --verbose         more detail (-vv adds a shell trace)
+  -h, --help            this help
+
+${C_BOLD}Config file${C_OFF} (key=value, # comments; flags override it)
+  dest=/restore/here
+  rm=no
+  passfile=/path/to/passphrase.txt
+
+${C_BOLD}Examples${C_OFF}
+  unseal X.tar.zst.age                   restore into current directory
+  unseal --rm X.tar.zst.age ~/docs       restore then delete the archive
+  unseal -q -p pass.txt X.tar.zst.age    fully scripted, silent
+EOF
+)"
+    fi
+    if $HAVE_GUM && [[ -t 1 ]]; then
+        gum style --border rounded --border-foreground 6 --padding "0 2" --margin "1 0 0 0" "$title"
+        printf '%s\n\n' "$body"
+    else
+        printf '\n%s%s%s\n\n%s\n\n' "$C_BOLD" "$title" "$C_OFF" "$body"
+    fi
+    exit 0
+}
+
+# ---------------------------------------------------------------- args ------
+parse_config() {
+    local file="$1" key val
+    [[ -r "$file" ]] || die "cannot read config file: $file"
+    while IFS='=' read -r key val; do
+        key="${key%%#*}"; key="${key//[[:space:]]/}"
+        [[ -z "$key" ]] && continue
+        case "$key" in
+            name)     [[ -n "$ARCHIVE" ]]    || ARCHIVE="$val" ;;
+            level)    [[ -n "$LEVEL" ]]      || LEVEL="$val" ;;
+            delete)   [[ -n "$DELETE_ORIG" ]] || DELETE_ORIG="$val" ;;
+            extra)    [[ -n "$EXTRA_RAW" ]]  || EXTRA_RAW="$val" ;;
+            passfile) [[ -n "$PASSFILE" ]]   || PASSFILE="$val" ;;
+            rm)       [[ "$RM_ARCHIVE" == true ]] || { [[ "${val,,}" == y* ]] && RM_ARCHIVE=true; } ;;
+            dest)     [[ -n "$DEST" ]]       || DEST="$val" ;;
+            *) msg 1 "${C_YELLOW}Warning:${C_OFF} unknown config key '$key' in $file" ;;
+        esac
+    done < "$file"
+}
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -n|--name)        [[ $# -ge 2 ]] || die "$1 needs a value"; ARCHIVE="$2"; shift 2 ;;
+        -l|--level)       [[ $# -ge 2 ]] || die "$1 needs a value"; LEVEL="$2"; shift 2 ;;
+        -d|--delete)      DELETE_ORIG=yes; shift ;;
+        -x|--extra)       [[ $# -ge 2 ]] || die "$1 needs a value"; EXTRA_RAW="$2"; shift 2 ;;
+        -f|--force)       FORCE=true; shift ;;
+        -r|--rm)          RM_ARCHIVE=true; shift ;;
+        -p|--pass-file)   [[ $# -ge 2 ]] || die "$1 needs a value"; PASSFILE="$2"; shift 2 ;;
+        -P|--passphrase)  [[ $# -ge 2 ]] || die "$1 needs a value"; PASSPHRASE="$2"; shift 2 ;;
+        -c|--config)      [[ $# -ge 2 ]] || die "$1 needs a value"; CONFIG="$2"; shift 2 ;;
+        -y|--yes)         ASSUME_YES=true; shift ;;
+        -q|--quiet|--silent) VERBOSITY=0; ASSUME_YES=true; shift ;;
+        -v|--verbose)     (( VERBOSITY < 2 )) && VERBOSITY=2 || VERBOSITY=3; shift ;;
+        -vv)              VERBOSITY=3; shift ;;
+        -h|--help)        show_help ;;
+        --)               shift; POSITIONAL+=("$@"); break ;;
+        -*)               die "unknown option: $1 (see --help)" ;;
+        *)                POSITIONAL+=("$1"); shift ;;
+    esac
+done
+(( VERBOSITY >= 3 )) && set -x
+
+[[ -n "$CONFIG" ]] && parse_config "$CONFIG"
+$INTERACTIVE || ASSUME_YES=true
+
+for cmd in tar zstd age pv script; do
+    command -v "$cmd" &>/dev/null || die "'$cmd' is not installed (sudo pacman -S $cmd)"
+done
+
+# ------------------------------------------------------------- prompts ------
+ui_input() { # header, default, placeholder
+    if $HAVE_GUM; then
+        gum input --header="$1" --value="${2:-}" --placeholder="${3:-}" </dev/tty
+    else
+        local reply; read -rp "$1 [${2:-}]: " reply </dev/tty; printf '%s' "${reply:-${2:-}}"
+    fi
+}
+ui_password() { # header
+    if $HAVE_GUM; then
+        gum input --password --header "$1" </dev/tty
+    else
+        local reply; read -rsp "$1: " reply </dev/tty; printf '\n' >&2; printf '%s' "$reply"
+    fi
+}
+ui_confirm() { # question, default(yes/no)
+    if $HAVE_GUM; then
+        local d=--default=false; [[ "${2:-no}" == yes ]] && d=--default=true
+        gum confirm "$d" "$1" </dev/tty
+    else
+        local reply; read -rp "$1 [y/N]: " reply </dev/tty; [[ "${reply,,}" == y* ]]
+    fi
+}
+
+get_passphrase() {
+    if [[ -n "$PASSFILE" ]]; then
+        [[ -r "$PASSFILE" ]] || die "cannot read pass file: $PASSFILE"
+        IFS= read -r PASSPHRASE < "$PASSFILE" || true
+        [[ -n "$PASSPHRASE" ]] || die "pass file is empty: $PASSFILE"
+    elif [[ -n "$PASSPHRASE" ]]; then
+        :
+    elif $INTERACTIVE; then
+        if [[ "$MODE" == "seal" ]]; then
+            PASSPHRASE="$(ui_password "Passphrase (empty = autogenerate)")"
+            if [[ -z "$PASSPHRASE" ]]; then
+                PASSPHRASE="$(openssl rand -base64 24)"
+                printf '%sGenerated passphrase (save it now):%s %s\n' "$C_YELLOW" "$C_OFF" "$PASSPHRASE" >&2
+            else
+                local confirm; confirm="$(ui_password "Confirm passphrase")"
+                [[ "$PASSPHRASE" == "$confirm" ]] || die "passphrases do not match"
+            fi
+        else
+            PASSPHRASE="$(ui_password "Passphrase")"
+            [[ -n "$PASSPHRASE" ]] || die "empty passphrase"
+        fi
+    else
+        die "no passphrase: use --pass-file/--passphrase (or a config passfile=) when non-interactive"
+    fi
+}
+
+# -------------------------------------------------------- progress bar ------
+human_bytes() { # bytes -> "1.4 GiB" (writes to REPLY_HB)
+    local b=$1
+    if   (( b >= 1073741824 )); then printf -v REPLY_HB '%d.%d GiB' $(( b / 1073741824 )) $(( b % 1073741824 * 10 / 1073741824 ))
+    elif (( b >= 1048576 ));    then printf -v REPLY_HB '%d.%d MiB' $(( b / 1048576 ))    $(( b % 1048576 * 10 / 1048576 ))
+    elif (( b >= 1024 ));       then printf -v REPLY_HB '%d KiB' $(( b / 1024 ))
+    else                             printf -v REPLY_HB '%d B' "$b"
+    fi
+}
+draw_bar() { # label, total_bytes; reads cumulative byte counts on stdin (pv -bn)
+    local label="$1" total="$2" width=24
+    local -a partial=('' '▏' '▎' '▍' '▌' '▋' '▊' '▉')
+    local bytes pcth pct_s f8 full rem empty fill_s empty_s
+    local now rate=0 eta eta_s done_s rate_s
+    local -a win_t=() win_b=()                        # sliding window (~2s at 0.2s ticks)
+    local i=0 wsize=10 oldest
+    while IFS= read -r bytes; do
+        [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+        now=${EPOCHREALTIME/./}                       # microseconds
+        if (( i > 0 )); then
+            oldest=$(( i >= wsize ? i % wsize : 0 ))
+            if (( now > win_t[oldest] && bytes >= win_b[oldest] )); then
+                rate=$(( (bytes - win_b[oldest]) * 1000000 / (now - win_t[oldest]) ))
+            fi
+        fi
+        win_t[i % wsize]=$now; win_b[i % wsize]=$bytes; (( i++ )) || true
+        pcth=$(( total > 0 ? bytes * 10000 / total : 10000 )); (( pcth > 10000 )) && pcth=10000
+        printf -v pct_s '%3d.%02d%%' $(( pcth / 100 )) $(( pcth % 100 ))
+        # bar filled in 1/8-character steps (width*8 slices of the total)
+        f8=$(( total > 0 ? bytes * width * 8 / total : width * 8 )); (( f8 > width * 8 )) && f8=$(( width * 8 ))
+        full=$(( f8 / 8 )); rem=$(( f8 % 8 ))
+        empty=$(( width - full - (rem > 0 ? 1 : 0) ))
+        printf -v fill_s '%*s' "$full" ''; fill_s=${fill_s// /█}
+        printf -v empty_s '%*s' "$empty" ''; empty_s=${empty_s// /░}
+        human_bytes "$bytes"; done_s=$REPLY_HB
+        human_bytes "$rate";  rate_s=$REPLY_HB
+        eta_s='--:--'
+        if (( rate > 0 && total > bytes )); then
+            eta=$(( (total - bytes) / rate ))
+            if (( eta >= 3600 )); then printf -v eta_s '%d:%02d:%02d' $(( eta / 3600 )) $(( eta % 3600 / 60 )) $(( eta % 60 ))
+            else                       printf -v eta_s '%d:%02d' $(( eta / 60 )) $(( eta % 60 ))
+            fi
+        elif (( bytes >= total )); then eta_s='0:00'
+        fi
+        printf '\r  %s %s%s%s%s%s%s %s  %10s  %10s/s  ETA %8s\e[K' \
+            "$label" "$C_CYAN" "$fill_s" "${partial[$rem]}" "$C_GRAY" "$empty_s" "$C_OFF" \
+            "$pct_s" "$done_s" "$rate_s" "$eta_s" >&2
+    done
+    printf '\r\e[2K' >&2
+}
+
+# ------------------------------------------------------------ age(pty) ------
+# age insists on reading passphrases from a tty, so run it under `script` with
+# the passphrase fed to the pty; the data travels on inherited fds 8/9.
+age_pty() { # extra age args...; passphrase lines on stdin
+    script -qec "age $* " /dev/null >/dev/null 2>&1
+}
+
+# ================================================================ seal ======
+run_seal() {
+    [[ ${#POSITIONAL[@]} -eq 1 ]] || { show_help; }
+    TARGET="${POSITIONAL[0]}"
+    [[ -e "$TARGET" ]] || die "not found: $TARGET"
+    local target_abs parent base
+    target_abs="$(realpath -- "$TARGET")"
+    parent="$(dirname -- "$target_abs")"
+    base="$(basename -- "$target_abs")"
+    local default_name="${base}.tar.zst.age"
+
+    if ! $ASSUME_YES; then
+        [[ -n "$ARCHIVE" ]]     || ARCHIVE="$(ui_input "Archive name" "$default_name")"
+        [[ -n "$LEVEL" ]]       || LEVEL="$(ui_input "zstd level (1-22)" "10")"
+        [[ -n "$DELETE_ORIG" ]] || { DELETE_ORIG=no; if ui_confirm "Delete original after sealing?" no; then DELETE_ORIG=yes; fi; }
+        [[ -n "$EXTRA_RAW" ]]   || EXTRA_RAW="$(ui_input "Extra zstd args (optional)" "" "--long")"
+    fi
+    ARCHIVE="${ARCHIVE:-$default_name}"
+    [[ "$ARCHIVE" == *.age ]] || ARCHIVE="${ARCHIVE}.tar.zst.age"
+    LEVEL="${LEVEL:-10}"
+    [[ "$LEVEL" =~ ^[0-9]+$ && "$LEVEL" -ge 1 && "$LEVEL" -le 22 ]] || die "level must be 1-22"
+    DELETE_ORIG="${DELETE_ORIG:-no}"
+    local ultra=() extra=()
+    (( LEVEL > 19 )) && ultra=(--ultra)
+    [[ -n "$EXTRA_RAW" ]] && read -r -a extra <<< "$EXTRA_RAW"
+
+    if [[ -e "$ARCHIVE" && "$FORCE" != true ]]; then
+        if $INTERACTIVE && ! $ASSUME_YES; then
+            ui_confirm "'$ARCHIVE' exists. Overwrite?" no || die "aborted"
+        else
+            die "'$ARCHIVE' exists (use --force to overwrite)"
+        fi
+    fi
+
+    get_passphrase
+    local size; size="$(du -sb -- "$target_abs" | cut -f1)"
+    msg 2 "target=$target_abs archive=$ARCHIVE level=$LEVEL ultra=${ultra[*]:-off} extra=${extra[*]:-none} delete=$DELETE_ORIG size=${size}B"
+
+    local pipe_pid
+    SEAL_TMP="$(mktemp -p "$(dirname -- "$(realpath -m -- "$ARCHIVE")")" ".seal.XXXXXX")"
+    trap 'rm -f "$SEAL_TMP"' EXIT
+
+    if (( VERBOSITY == 0 )); then
+        exec 9< <(tar -cf - -C "$parent" "$base" | zstd -q -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
+    elif (( VERBOSITY >= 2 )); then
+        exec 9< <(tar -cf - -C "$parent" "$base" | pv -pterb -s "$size" | zstd -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
+    else
+        exec 9< <(tar -cf - -C "$parent" "$base" | pv -bn -i 0.2 2> >(draw_bar "Sealing $base" "$size") | zstd -q -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
+    fi
+    pipe_pid=$!
+    printf '%s\n%s\n' "$PASSPHRASE" "$PASSPHRASE" | age_pty -e -p -o "${SEAL_TMP@Q}" /dev/fd/9 \
+        || { wait "$pipe_pid" 2>/dev/null || true; die "encryption failed"; }
+    exec 9<&-
+    wait "$pipe_pid" || die "tar/zstd pipeline failed"
+    (( VERBOSITY == 1 )) && printf '\r\e[2K' >&2
+    mv -f "$SEAL_TMP" "$ARCHIVE"
+    trap - EXIT
+
+    local orig_size new_size
+    orig_size="$(du -sh -- "$target_abs" | cut -f1)"
+    new_size="$(du -sh -- "$ARCHIVE" | cut -f1)"
+    msg 1 "${C_GREEN}✔${C_OFF} Sealed ${C_BOLD}$base${C_OFF} → ${C_CYAN}$ARCHIVE${C_OFF} ($orig_size → $new_size)"
+    if [[ "${DELETE_ORIG,,}" == y* ]]; then
+        rm -rf -- "$target_abs"
+        msg 1 "${C_GREEN}✔${C_OFF} Deleted original: $target_abs"
+    fi
+}
+
+# ============================================================== unseal ======
+run_unseal() {
+    [[ ${#POSITIONAL[@]} -ge 1 && ${#POSITIONAL[@]} -le 2 ]] || { show_help; }
+    ARCHIVE="${POSITIONAL[0]}"
+    DEST="${POSITIONAL[1]:-${DEST:-.}}"
+    [[ -f "$ARCHIVE" ]] || die "not found: $ARCHIVE"
+    [[ -d "$DEST" ]] || die "destination is not a directory: $DEST"
+
+    get_passphrase
+    local asize p8 p9
+    asize="$(stat -c %s -- "$ARCHIVE")"
+    UNSEAL_TMPDIR="$(mktemp -d -p "$DEST" ".unseal.XXXXXX")"
+    trap 'rm -rf "$UNSEAL_TMPDIR"' EXIT
+    msg 2 "archive=$ARCHIVE dest=$DEST rm_after=$RM_ARCHIVE size=${asize}B"
+
+    if (( VERBOSITY == 0 )); then
+        exec 8< "$ARCHIVE"; p8=""
+    elif (( VERBOSITY >= 2 )); then
+        exec 8< <(pv -pterb -- "$ARCHIVE"); p8=$!
+    else
+        exec 8< <(pv -bn -i 0.2 -- "$ARCHIVE" 2> >(draw_bar "Unsealing $(basename -- "$ARCHIVE")" "$asize")); p8=$!
+    fi
+    exec 9> >(zstd -q -d | tar -xf - -C "$UNSEAL_TMPDIR"); p9=$!
+    printf '%s\n' "$PASSPHRASE" | age_pty -d -o /dev/fd/9 /dev/fd/8 \
+        || die "decryption failed (wrong passphrase or corrupted archive)"
+    exec 8<&- 9>&-
+    wait "$p9" || die "zstd/tar pipeline failed"
+    [[ -n "$p8" ]] && { wait "$p8" 2>/dev/null || true; }
+    (( VERBOSITY == 1 )) && printf '\r\e[2K' >&2
+
+    local entries=() conflicts=() entry name
+    while IFS= read -r -d '' entry; do
+        name="$(basename -- "$entry")"
+        entries+=("$entry")
+        [[ -e "$DEST/$name" ]] && conflicts+=("$DEST/$name")
+    done < <(find "$UNSEAL_TMPDIR" -mindepth 1 -maxdepth 1 -print0)
+    [[ ${#entries[@]} -gt 0 ]] || die "archive was empty"
+    if [[ ${#conflicts[@]} -gt 0 ]]; then
+        printf '%s\n' "${conflicts[@]/#/  }" >&2
+        die "would overwrite the paths above; nothing restored"
+    fi
+    for entry in "${entries[@]}"; do
+        mv -- "$entry" "$DEST/"
+        msg 1 "${C_GREEN}✔${C_OFF} Restored: ${C_CYAN}$DEST/$(basename -- "$entry")${C_OFF}"
+    done
+    if $RM_ARCHIVE; then
+        rm -f -- "$ARCHIVE"
+        msg 1 "${C_GREEN}✔${C_OFF} Deleted archive: $ARCHIVE"
+    fi
+    trap - EXIT
+    rm -rf "$UNSEAL_TMPDIR"
+}
+
+if [[ "$MODE" == "seal" ]]; then run_seal; else run_unseal; fi

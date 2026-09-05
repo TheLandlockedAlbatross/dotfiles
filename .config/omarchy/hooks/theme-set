@@ -19,12 +19,12 @@ if [ "$wants_active" = true ] && [ "$has_active" = "false" ]; then
   TEMP=$(mktemp)
   strip_comments "$CONFIG" | jq '."hyprland/workspaces"."format-icons".active = "󱓻"' > "$TEMP"
   mv "$TEMP" "$CONFIG"
-  omarchy-restart-waybar &
+  
 elif [ "$wants_active" = false ] && [ "$has_active" = "true" ]; then
   TEMP=$(mktemp)
   strip_comments "$CONFIG" | jq '."hyprland/workspaces"."format-icons" |= del(.active)' > "$TEMP"
   mv "$TEMP" "$CONFIG"
-  omarchy-restart-waybar &
+  
 fi
 
 # Rebuild workspace background mapping if active

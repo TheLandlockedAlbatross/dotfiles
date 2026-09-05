@@ -6,7 +6,6 @@ STATE="$HOME/.cache/waybar-clock-alt"
 
 if [[ "$1" == "toggle" ]]; then
   if [[ -f "$STATE" ]]; then rm -f "$STATE"; else touch "$STATE"; fi
-  pkill -RTMIN+12 waybar
   exit 0
 fi
 

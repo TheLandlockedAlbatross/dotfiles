@@ -156,11 +156,9 @@
 !.local/bin/unseal
 # omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts
 !.local/bin/walker
-!.local/bin/omarchy-toggle-waybar
 !.local/bin/omarchy-launch-audio
 !.local/bin/omarchy-launch-bluetooth
 !.local/bin/omarchy-launch-walker
 !.local/bin/omarchy-launch-wifi
-!.local/bin/omarchy-restart-waybar
 !.local/bin/omarchy-swayosd-client
 !.local/bin/omarchy-tz-select
