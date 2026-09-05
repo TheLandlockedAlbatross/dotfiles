@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "tla.workspaces",
+  "name": "Decade workspaces",
+  "version": "1.0.0",
+  "author": "tla",
+  "description": "Workspace digits for the decade-per-monitor layout; focused workspace keeps its number, highlighted in the theme accent color instead of a block glyph",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "Decade workspaces",
+    "description": "Per-monitor decade digits with accent-color focus highlight",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}
