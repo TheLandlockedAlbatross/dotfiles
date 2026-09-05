@@ -26,6 +26,8 @@
 !.config/omarchy/hooks/
 !.config/omarchy/hooks/*
 !.config/omarchy/workspace-backgrounds.conf
+!.config/omarchy/branding/
+!.config/omarchy/branding/screensaver.txt
 !.config/omarchy/extensions/
 !.config/omarchy/extensions/*
 .config/omarchy/hooks/*.sample
