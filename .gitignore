@@ -31,6 +31,9 @@
 .config/omarchy/hooks/*.sample
 !.config/hypr/
 !.config/hypr/*.conf
+# Vendored omarchy 3.8.4 default hypr confs (survive the omarchy 4 conf->lua switch)
+!.config/hypr/omarchy3-defaults/
+!.config/hypr/omarchy3-defaults/**
 !.config/xdg-desktop-portal/
 !.config/xdg-desktop-portal/hyprland-portals.conf
 !.config/hypr/scripts/
@@ -137,3 +140,11 @@
 !.local/bin/bw-backup-menu
 !.local/bin/bw-backup-watcher
 !.local/bin/bw-vault-decrypt
+# omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts
+!.local/bin/omarchy-launch-audio
+!.local/bin/omarchy-launch-bluetooth
+!.local/bin/omarchy-launch-walker
+!.local/bin/omarchy-launch-wifi
+!.local/bin/omarchy-restart-waybar
+!.local/bin/omarchy-swayosd-client
+!.local/bin/omarchy-tz-select
