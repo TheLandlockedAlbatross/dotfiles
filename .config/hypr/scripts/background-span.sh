@@ -82,7 +82,9 @@ PAINT_LOCK="$SLICE_DIR/paint.lock"
 stop_watcher() {
   local pid
   pid=$(cat "$WATCH_PID_FILE" 2>/dev/null)
-  [[ -n $pid ]] && kill "$pid" 2>/dev/null
+  # Kill the whole process group (setsid gave the watcher its own), so a
+  # long-running inotifywait child dies with it instead of lingering.
+  [[ -n $pid ]] && { kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null; }
   rm -f "$WATCH_PID_FILE"
 }
 
@@ -99,10 +101,24 @@ start_watcher() {
 cmd_watch() {
   mkdir -p "$SLICE_DIR"
   exec 9>"$WATCH_LOCK"
-  flock -n 9 || exit 0          # singleton: another watcher already runs
+  if ! flock -n 9; then
+    # Lock held. If the recorded watcher is dead, the lock fd leaked into a
+    # child (an orphaned inotifywait, a daemon): unlink the file and lock the
+    # fresh inode — leaked holders keep only the old one.
+    local pid
+    pid=$(cat "$WATCH_PID_FILE" 2>/dev/null)
+    if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
+      exit 0                    # real watcher alive: stay singleton
+    fi
+    rm -f "$WATCH_LOCK"
+    exec 9>"$WATCH_LOCK"
+    flock -n 9 || exit 0
+  fi
   echo $$ > "$WATCH_PID_FILE"
   while span_on && ! individual_on; do
-    inotifywait -qq -t 300 -e create -e moved_to -e delete -e attrib "$CURRENT_DIR" 2>/dev/null
+    # 9>&- : inotifywait must not inherit the watch lock, or an orphaned
+    # instance blocks replacement watchers for up to its full timeout.
+    inotifywait -qq -t 300 -e create -e moved_to -e delete -e attrib "$CURRENT_DIR" 2>/dev/null 9>&-
     span_on || break
     individual_on && break
     sleep 0.4   # let the link settle and coalesce the create/rename burst
@@ -126,9 +142,9 @@ paint_span_only() {
     render_slices || exit 1
     pkill -x swaybg 2>/dev/null   # clear any legacy fill instances
     if ! pgrep -x awww-daemon >/dev/null; then
-      # 8>&- : the daemon must NOT inherit the paint lock fd, or it holds the
-      # lock for life and every later paint times out.
-      setsid uwsm-app -- awww-daemon >/dev/null 2>&1 8>&- &
+      # 8>&- 9>&- : the daemon must NOT inherit the paint or watch lock fds,
+      # or it holds them for life and wedges every later paint/watcher.
+      setsid uwsm-app -- awww-daemon >/dev/null 2>&1 8>&- 9>&- &
       for _ in $(seq 1 30); do
         awww query >/dev/null 2>&1 && break
         sleep 0.1
@@ -138,11 +154,14 @@ paint_span_only() {
     # of the shell's door animation); initial paints stay instant.
     local trans=(--transition-type none)
     [[ "$1" == animate ]] && trans=(--transition-type center --transition-duration 0.8 --transition-fps 60)
-    local name rest
+    # Wait ONLY on the img jobs by pid: uwsm-app can exec the daemon in place
+    # of detaching it, and a bare `wait` then blocks on the daemon forever.
+    local name rest pids=()
     while read -r name rest; do
-      awww img -o "$name" "$SLICE_DIR/$name.jpg" "${trans[@]}" 2>/dev/null &
+      timeout 15 awww img -o "$name" "$SLICE_DIR/$name.jpg" "${trans[@]}" 2>/dev/null &
+      pids+=($!)
     done < <(monitor_geometry)
-    wait
+    (( ${#pids[@]} )) && wait "${pids[@]}" 2>/dev/null
   ) 8>"$PAINT_LOCK"
 }
 
