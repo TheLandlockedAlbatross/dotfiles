@@ -106,7 +106,7 @@ cmd_watch() {
     span_on || break
     individual_on && break
     sleep 0.4   # let the link settle and coalesce the create/rename burst
-    paint_span_only
+    paint_span_only animate
   done
   rm -f "$WATCH_PID_FILE"
 }
@@ -134,10 +134,15 @@ paint_span_only() {
         sleep 0.1
       done
     fi
+    # Background switches get the center-outward reveal (nearest awww analog
+    # of the shell's door animation); initial paints stay instant.
+    local trans=(--transition-type none)
+    [[ "$1" == animate ]] && trans=(--transition-type center --transition-duration 0.8 --transition-fps 60)
     local name rest
     while read -r name rest; do
-      awww img -o "$name" "$SLICE_DIR/$name.jpg" --transition-type none 2>/dev/null
+      awww img -o "$name" "$SLICE_DIR/$name.jpg" "${trans[@]}" 2>/dev/null &
     done < <(monitor_geometry)
+    wait
   ) 8>"$PAINT_LOCK"
 }
 
