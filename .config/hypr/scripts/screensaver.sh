@@ -22,14 +22,20 @@ launch_on_monitor() {
   *Alacritty*)
     hyprctl dispatch exec -- \
       alacritty --class=org.omarchy.screensaver \
-      --config-file ~/.local/share/omarchy/default/alacritty/screensaver.toml \
+      --config-file /usr/share/omarchy/default/alacritty/screensaver.toml \
       -e omarchy-screensaver
     ;;
   *ghostty*)
     hyprctl dispatch exec -- \
       ghostty --class=org.omarchy.screensaver \
-      --config-file=~/.local/share/omarchy/default/ghostty/screensaver \
+      --config-file=/usr/share/omarchy/default/ghostty/screensaver \
       --font-size=18 \
+      -e omarchy-screensaver
+    ;;
+  *foot*)
+    hyprctl dispatch exec -- \
+      foot --app-id=org.omarchy.screensaver \
+      --config=/usr/share/omarchy/default/foot/screensaver.ini \
       -e omarchy-screensaver
     ;;
   *kitty*)
@@ -40,7 +46,7 @@ launch_on_monitor() {
       -e omarchy-screensaver
     ;;
   *)
-    notify-send "Screensaver only runs in Alacritty, Ghostty, or Kitty"
+    omarchy-notification-send -g ✋ "Screensaver only runs in Alacritty, Foot, Ghostty, or Kitty"
     ;;
   esac
 }
