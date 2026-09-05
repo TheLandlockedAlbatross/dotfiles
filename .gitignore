@@ -110,6 +110,8 @@
 !.config/ghostty/config
 !.config/tmux/
 !.config/tmux/tmux.conf
+!.config/herdr/
+!.config/herdr/config.toml
 !.config/yazi/
 !.config/yazi/yazi.toml
 !.config/btop/
