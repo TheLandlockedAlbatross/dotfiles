@@ -8,15 +8,19 @@
     "custom/omarchy",
     "hyprland/workspaces"
   ],
+  // Center mirrors the omarchy 4 default bar: indicators left of the clock,
+  // then clock, keyboard layout, weather, update.
   "modules-center": [
-    "custom/clock",
-    "custom/weather",
-    "hyprland/language",
-    "custom/update",
     "custom/voxtype",
+    "custom/notification-silencing-indicator",
+    "custom/nightlight-indicator",
+    "custom/reminder-indicator",
     "custom/screenrecording-indicator",
     "custom/idle-indicator",
-    "custom/notification-silencing-indicator"
+    "custom/clock",
+    "hyprland/language",
+    "custom/weather",
+    "custom/update"
   ],
   "modules-right": [
     "tray",
@@ -215,6 +219,18 @@
     "tooltip": true,
     "on-click-right": "omarchy-voxtype-config",
     "on-click": "omarchy-voxtype-model"
+  },
+  "custom/nightlight-indicator": {
+    "on-click": "omarchy-toggle-nightlight",
+    "exec": "~/.config/waybar/indicators/nightlight.sh",
+    "interval": 5,
+    "return-type": "json"
+  },
+  "custom/reminder-indicator": {
+    "on-click": "omarchy-reminder -i",
+    "exec": "~/.config/waybar/indicators/reminder.sh",
+    "interval": 15,
+    "return-type": "json"
   },
   "custom/idle-indicator": {
     "on-click": "omarchy-toggle-idle",
