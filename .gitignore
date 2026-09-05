@@ -30,6 +30,10 @@
 !.config/omarchy/branding/screensaver.txt
 !.config/omarchy/extensions/
 !.config/omarchy/extensions/*
+!.config/omarchy/shell.json
+# omarchy 4 shell bar plugins (VPN + poll rate ports)
+!.config/omarchy/plugins/
+!.config/omarchy/plugins/**
 .config/omarchy/hooks/*.sample
 !.config/hypr/
 !.config/hypr/*.conf

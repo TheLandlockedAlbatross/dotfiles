@@ -27,13 +27,9 @@ for i in "${!STEPS[@]}"; do
   if [ "${STEPS[$i]}" = "$val" ]; then
     echo "$i" > "$STATE_FILE"
 
-    # Rewrite all interval values in waybar config
-    config="$HOME/.config/waybar/config.jsonc"
-    # Convert to integer for interval (minimum 1)
-    interval=$(awk -v v="$val" 'BEGIN { i = int(v); if (i < 1) i = 1; print i }')
-    sed -i "s/\"interval\": *[0-9]*/\"interval\": $interval/g" "$config"
-
-    omarchy-restart-waybar &
+    # Nudge the omarchy-shell bar widgets to pick up the new cadence
+    omarchy-shell -q tla.poll-rate refresh
+    omarchy-shell -q tla.vpn refresh
     break
   fi
 done

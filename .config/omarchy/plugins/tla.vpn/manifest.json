@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "tla.vpn",
+  "name": "VPN network",
+  "version": "1.0.0",
+  "author": "tla",
+  "description": "Network status icon with VPN overlay: green = daemon VPN, orange = netns tunnel only, red = VPN down",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "VPN network",
+    "description": "Network + VPN state, driven by ~/.config/waybar/network-vpn.sh",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

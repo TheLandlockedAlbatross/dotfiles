@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "tla.poll-rate",
+  "name": "Poll rate",
+  "version": "1.0.0",
+  "author": "tla",
+  "description": "Shows and sets the refresh cadence for the script-driven bar widgets",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "Poll rate",
+    "description": "Refresh cadence for script-driven widgets (state in /tmp/waybar-poll-rate)",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
