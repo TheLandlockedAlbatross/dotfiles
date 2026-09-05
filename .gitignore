@@ -61,6 +61,12 @@
 !.config/waybar/network-vpn.sh
 !.config/waybar/network-vpn-incognito.sh
 !.config/waybar/screen-brightness.sh
+# omarchy 4 bar features adopted as waybar modules
+!.config/waybar/agents.sh
+!.config/waybar/weather.sh
+!.config/waybar/tailscale.sh
+!.config/waybar/indicators/
+!.config/waybar/indicators/*.sh
 !.config/waybar/screen-temperature.sh
 !.config/waybar/screen-display-toggle.sh
 !.config/i3/
