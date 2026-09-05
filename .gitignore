@@ -108,6 +108,8 @@
 !.config/sxhkd/sxhkdrc
 !.config/ghostty/
 !.config/ghostty/config
+!.config/foot/
+!.config/foot/foot.ini
 !.config/tmux/
 !.config/tmux/tmux.conf
 !.config/herdr/

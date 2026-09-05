@@ -62,3 +62,6 @@ keybind = shift+enter=csi:13;2u
 
 # Legacy encoding sends Alt+Shift+Enter the same as Alt+Enter; send CSI-u so tmux can match M-S-Enter.
 keybind = alt+shift+enter=csi:13;4u
+
+# Ctrl+Backspace = delete previous word (send ^W; consistent with foot + readline + Claude Code)
+keybind = ctrl+backspace=text:\x17
