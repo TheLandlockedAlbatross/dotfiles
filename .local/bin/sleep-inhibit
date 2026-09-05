@@ -3,11 +3,11 @@
 # Toggleable sleep inhibitor with omarchy-style walker prompt.
 #
 # Usage:
-#   sleep-inhibit.sh                       # walker prompt: time field, then confirm menu
-#   sleep-inhibit.sh <duration...>         # set directly, e.g. "8h30m", "8:30:24", "8 and a half hours"
-#   sleep-inhibit.sh show                  # notification with remaining time + fields
-#   sleep-inhibit.sh clear                 # release the inhibitor
-#   sleep-inhibit.sh parse <text>          # print parsed seconds (debug)
+#   sleep-inhibit                       # walker prompt: time field, then confirm menu
+#   sleep-inhibit <duration...>         # set directly, e.g. "8h30m", "8:30:24", "8 and a half hours"
+#   sleep-inhibit show                  # notification with remaining time + fields
+#   sleep-inhibit clear                 # release the inhibitor
+#   sleep-inhibit parse <text>          # print parsed seconds (debug)
 #   Optional CLI flags: --who <s> --why <s> --what <s>
 #
 # A bare number means hours. "inf"/"forever" holds until cleared or reboot.

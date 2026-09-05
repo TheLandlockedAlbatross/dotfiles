@@ -8,6 +8,9 @@
 
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/scripts"
 WS_MAP="$CONF_DIR/workspace-map.sh"
+# Where the internal panel is looked for. A variable so a test can point it at
+# a directory it controls instead of at the machine it happens to run on.
+DRM_DIR="${DRM_DIR:-/sys/class/drm}"
 
 # Load optional override for PRIMARY_DISPLAY.
 # shellcheck source=monitor-fallback.conf
@@ -25,13 +28,13 @@ PRIMARY_RESOLVED=false
 resolve_primary() {
   $PRIMARY_RESOLVED && return
   PRIMARY_RESOLVED=true
-  if [[ -n "$PRIMARY_DISPLAY" ]]; then
+  if [[ -n "${PRIMARY_DISPLAY:-}" ]]; then
     PRIMARY="$PRIMARY_DISPLAY"
     return
   fi
   local attempts=20
   for (( i=1; i<=attempts; i++ )); do
-    for f in /sys/class/drm/card*-eDP-*/status; do
+    for f in "$DRM_DIR"/card*-eDP-*/status; do
       [[ -f "$f" ]] || continue
       local dir
       dir=$(basename "$(dirname "$f")")
@@ -54,12 +57,18 @@ any_external_connected() {
   [[ -n "$count" && "$count" -gt 0 ]]
 }
 
+# Said once, not once per hotplug: a desktop has no internal panel and never
+# will, so after the first time there is nothing new to report.
+WARNED_NO_PRIMARY=false
 check_monitors() {
   local primary
   resolve_primary
   primary="$PRIMARY"
   if [[ -z "$primary" ]]; then
-    logger -t monitor-fallback "WARNING: could not detect primary display"
+    if ! $WARNED_NO_PRIMARY; then
+      WARNED_NO_PRIMARY=true
+      logger -t monitor-fallback "no internal panel found; fallback inactive on this machine"
+    fi
     return 1
   fi
 
@@ -82,7 +91,7 @@ remap_workspaces() {
 
 # One-shot mode: run a single check and exit (used by hypridle after_sleep_cmd).
 # Retries up to 3 times to handle post-wake DRM/display settling.
-if [[ "$1" == "check" ]]; then
+if [[ "${1:-}" == "check" ]]; then
   rc=1
   for attempt in 1 2 3; do
     if check_monitors; then rc=0; break; fi
@@ -93,25 +102,40 @@ if [[ "$1" == "check" ]]; then
   exit "$rc"
 fi
 
+# One event off Hyprland's socket. Hyprland announces every hotplug twice, as
+# a plain event and as a v2 one carrying the id and name; matching only v2
+# keeps this to a single pass instead of remapping the whole layout twice.
+#
+# Remap before checking: it is what the user sees, and check_monitors can spend
+# up to 10s hunting for an eDP panel that a desktop does not have.
+handle_event() {
+  case "$1" in
+    monitorremovedv2\>\>*)
+      sleep 0.5
+      remap_workspaces
+      check_monitors
+      ;;
+    monitoraddedv2\>\>*)
+      # Longer settle: Hyprland walks its own reconnect path first, moving the
+      # workspaces it stamped on unplug back to the returning display.
+      sleep 1
+      remap_workspaces
+      check_monitors
+      ;;
+  esac
+}
+
+# Sourced rather than run: the tests reach the functions above without starting
+# a daemon.
+(return 0 2>/dev/null) && return
+
 # Daemon mode: check on startup, then listen for monitor events.
 # resolve_primary retries internally, so no fixed sleep needed.
 check_monitors
 
 while true; do
   socat -U - "UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" | while read -r line; do
-    # Remap first: it is what the user sees, and check_monitors can spend up to
-    # 10s hunting for an eDP panel that a desktop does not have.
-    if [[ "$line" == monitorremoved* ]]; then
-      sleep 0.5
-      remap_workspaces
-      check_monitors
-    elif [[ "$line" == monitoradded* ]]; then
-      # Longer settle: Hyprland walks its own reconnect path first, moving the
-      # workspaces it stamped on unplug back to the returning display.
-      sleep 1
-      remap_workspaces
-      check_monitors
-    fi
+    handle_event "$line"
   done
   sleep 2  # wait before reconnecting if socket drops
 done

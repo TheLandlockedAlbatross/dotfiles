@@ -86,6 +86,75 @@ show_vpn_menu() {
   esac
 }
 
+WS_MAP=~/.config/hypr/scripts/workspace-map.sh
+
+# Workspaces: one decade per display, and the align action that puts every
+# display on the same slot within its own decade. Same thing Super+Alt+E does
+# from the keyboard.
+show_workspaces_menu() {
+  local mode options
+  mode=$("$WS_MAP" mode)
+  options="󰕰  Align displays to a slot"
+  options="$options\n󰉁  Align displays to the slot in use"
+  options="$options\n󰋼  Slot ownership"
+  options="$options\n󰄰  Claim a decade for a replaced panel"
+  options="$options\n󰑓  Re-seed slots from the current layout"
+  options="$options\n󰓾  Layout: $mode"
+
+  case $(menu "Workspaces" "$options") in
+  *"to a slot"*) show_workspace_align_menu ;;
+  *"slot in use"*) "$WS_MAP" align ;;
+  *"Slot ownership"*) show_workspace_slots_menu ;;
+  *Claim*) "$WS_MAP" claim ;;
+  *Re-seed*) "$WS_MAP" reset ;;
+  *Layout*) "$WS_MAP" toggle; back_to show_workspaces_menu ;;
+  *) back_to show_trigger_menu ;;
+  esac
+}
+
+# One entry per slot, each spelling out the workspaces it lines the displays up
+# on, so slot 3 reads "3, 13, 23, 33". Both numbers come from the script rather
+# than being assumed, since a machine can be configured for a different count.
+show_workspace_align_menu() {
+  local decades size options="" k d ws list selected
+  read -r decades size < <("$WS_MAP" slots | awk '/^decades:/ {print $2, $4}')
+  [[ $decades =~ ^[0-9]+$ && $size =~ ^[0-9]+$ ]] || { decades=4; size=10; }
+
+  for ((k = 1; k <= size; k++)); do
+    list=""
+    for ((d = 0; d < decades; d++)); do
+      ws=$((d * size + k))
+      [[ -n $list ]] && list="$list, $ws" || list="$ws"
+    done
+    options="$options\n󰎣  Slot $k — $list"
+  done
+
+  selected=$(menu "Align to slot" "${options#\\n}" "--width 420")
+  case "$selected" in
+  *Slot*) "$WS_MAP" align "$(sed 's/^.*Slot \([0-9]*\) .*/\1/' <<<"$selected")" ;;
+  *) back_to show_workspaces_menu ;;
+  esac
+}
+
+# Read-only view of which panel owns which decade and who is hosting it now.
+show_workspace_slots_menu() {
+  menu "Slots" "$("$WS_MAP" slots)" "--width 700" >/dev/null
+  back_to show_workspaces_menu
+}
+
+show_trigger_menu() {
+  case $(menu "Trigger" "󰔛  Reminder\n  Capture\n󰧸  Transcode\n  Share\n󰕰  Workspaces\n󰔎  Toggle\n  Hardware") in
+  *Reminder*) show_reminder_menu ;;
+  *Capture*) show_capture_menu ;;
+  *Transcode*) omarchy-transcode || back_to show_trigger_menu ;;
+  *Share*) show_share_menu ;;
+  *Workspaces*) show_workspaces_menu ;;
+  *Toggle*) show_toggle_menu ;;
+  *Hardware*) show_hardware_menu ;;
+  *) show_main_menu ;;
+  esac
+}
+
 show_notify_focus_menu() {
   ~/.config/hypr/scripts/notify-focus-menu.sh
 }

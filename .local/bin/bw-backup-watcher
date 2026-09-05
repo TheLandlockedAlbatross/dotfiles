@@ -59,7 +59,7 @@ while true; do
 
     current_hash=$(vault_hash_for_user "$uuid")
     if [[ "$current_hash" != "$last_hash" ]]; then
-      "${XDG_CONFIG_HOME:-$HOME/.config}/hypr/scripts/bw-backup-gui.sh" --account "$email" "$@"
+      "$HOME/.local/bin/bw-backup-gui" --account "$email" "$@"
       echo "$current_hash" > "$hash_file"
     fi
   done < <(get_accounts)

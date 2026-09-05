@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Extract per-account Bitwarden vault data from data.json as timestamped backups
-# Usage: bw-backup-gui.sh [--notify|--no-notify] [--account EMAIL]
+# Usage: bw-backup-gui [--notify|--no-notify] [--account EMAIL]
 #   --notify       Send desktop notification on success (default)
 #   --no-notify    Suppress desktop notifications
 #   --account EMAIL  Only backup this specific account

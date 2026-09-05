@@ -35,6 +35,9 @@
 !.config/xdg-desktop-portal/hyprland-portals.conf
 !.config/hypr/scripts/
 !.config/hypr/scripts/*
+!.config/hypr/scripts/bglayout/*.py
+!.config/hypr/scripts/tests/*.py
+!.config/hypr/scripts/tests/*.sh
 !.config/wireplumber/
 !.config/wireplumber/wireplumber.conf.d/
 !.config/wireplumber/wireplumber.conf.d/bluetooth-a2dp-autoconnect.conf
@@ -125,3 +128,12 @@
 !macos/sudo-toggle/**
 !macos/restic-backup/
 !macos/restic-backup/**
+# General-purpose CLI tools on PATH (explicit per-file: .local/bin also holds
+# local-only tools that must stay out of the repo)
+!.local/bin/zfs-manager
+!.local/bin/sleep-inhibit
+!.local/bin/bw-backup-cli
+!.local/bin/bw-backup-gui
+!.local/bin/bw-backup-menu
+!.local/bin/bw-backup-watcher
+!.local/bin/bw-vault-decrypt

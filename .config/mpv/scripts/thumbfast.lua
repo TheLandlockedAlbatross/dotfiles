@@ -10,6 +10,12 @@ License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at https://mozilla.org/MPL/2.0/.
 ]]
 
+-- Local mod: jellyfin-mpv-shim injects its own trickplay stub named "thumbfast"
+-- via --script; when that happens this copy loads as "thumbfast2", never
+-- receives uosc's requests, but still clobbers the stub's thumbfast-info state.
+-- Only run when we own the canonical client name.
+if mp.get_script_name() ~= "thumbfast" then return end
+
 local options = {
     -- Socket path (leave empty for auto)
     socket = "",

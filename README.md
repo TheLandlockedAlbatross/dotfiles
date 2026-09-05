@@ -58,9 +58,23 @@ Each panel owns one decade for good. The pairing is recorded by panel identity r
 
 Unplug a display and only its own ten workspaces move, to the least loaded survivor, with ties going to the next panel clockwise. Nothing is renumbered and the other decades stay where they are, so `Caps + 3` is still workspace 13 with the same windows on it. Hyprland brings the workspaces home by itself when the panel comes back.
 
+`Super+Ctrl+Alt` plus a digit lines every display up on that slot within its own decade, so `3` means 3, 13, 23 and 33 at once, with `0` the tenth as everywhere else. A display only borrowing a decade because its panel is unplugged is left where it is, since lining that up would put one screen in two places at once.
+
+`Super+Alt+E` opens a picker for the same thing when the numbers are not in your head: type a slot and each display's row shows the workspace it is on and the one it would switch to, updating as you type. An empty box previews the slot already in use, which is what Enter then applies. The omarchy menu has these under Trigger, Workspaces, and `workspace-map.sh align N` does it from a shell.
+
+Replace a panel and the one it replaced still owns that decade, so the newcomer starts with none and sits out the alignment. `workspace-map.sh claim`, or the same entry in the omarchy menu, hands it the decade it is already showing. It is not automatic on purpose: unplug a panel for an hour, plug a different one in, and doing it silently would mean the first one comes back to nothing.
+
 Left alone it does not behave that way. Hyprland dumps the workspaces of a departing display onto whichever monitor it connected first, which has no relation to the layout, and leaves the workspace rules pointing at a connector that is no longer there. `workspace-map.sh` re-resolves the whole mapping on every hotplug event, driven by the listener in `monitor-fallback.sh`. Its `slots` command prints the current table, `plan` shows the rules it would write without applying them, and `reset` re-seeds the table from the layout in front of you.
 
 Nothing about it is specific to this machine: the layout order is computed from live geometry (rotated panels by their on-screen footprint, mirrors and disabled outputs skipped) and it works for any number of displays. The four decades come from the four digit-row layers `bindings.conf` binds, not from the hardware, so a machine with more displays than layers leaves the extras without a decade of their own and says so. Drop a `workspace-map.conf` next to the script setting `DECADES` to change that, and bind the matching layers.
+
+#### Backgrounds
+
+Per-workspace wallpapers (`Super+Shift+Ctrl+Alt+B`) hand each workspace one of the theme's backgrounds. On top of that, the layout editor (`Super+Shift+F9`) decides how an image sits on the screens: per monitor or spanned across any set of them, with pan, zoom and fit mode, saved per image.
+
+Switching the feature on is also the way back to a clean theme. It throws away every saved layout and every image added by hand, and says how many of each before it does, so there is one obvious route out of an arrangement that went wrong. Presets survive, since they are recipes rather than an arrangement.
+
+`o` in the editor adds images from anywhere on disk to the strip along the top. Nothing is copied into the theme; the list lives in `/tmp` and is gone after a reboot. An added image can be placed and spanned like any other, but the per-workspace map knows nothing about it and would paint over it on the next workspace switch, so applying one turns the per-workspace feature off and freezes what is on the screens. The editor says so and waits for a second Enter before doing it. Frozen is not unattended: displays coming and going are still followed, so slices are recut for the new geometry and a returning display gets its image back rather than a blank wall.
 
 `scripts/` is the main toolbox. Each script documents itself in its header comment; by category:
 
@@ -96,6 +110,7 @@ Menu overrides (monitor tools, VPN picker, extended setup), theme hooks, and the
 - **zsh**: znap-managed plugins (auto-cloned on first run), a prompt chooser (none/p10k/starship) that persists its choice, and modular per-topic files in `.zsh/custom/` (fzf, history, editor, package managers, and so on) with an `x11/` split for X11-only bits.
 - **bash**: ports of the fzf and history customizations in `.bash/custom/`, sourced after Omarchy's defaults.
 - **`.config/shell/hist-merge`**: read-only merged history view across zsh, bash and fish, time-ordered and tagged by shell. The `h` command in both shells uses it; `HISTORY_MODE` and `HISTORY_SCOPE` env vars (with per-shell overrides) switch between merged/per-shell views and global/per-directory history files. It never writes to any history file.
+- **`h` subcommands** (`h help` lists them): `h swap [file]` switches to a directory's history file read-only (nothing is written to any history file until `h back`; `hh` remains the switch-for-real variant), `h remove <n> ...` deletes entries by the numbers `h` shows (reaching zsh/bash/fish files in the merged view), and `h file` lists each shell's current history file with swap status (also shown at the end of `h help`); every subcommand also has a single-letter alias (`h r`, `h s`, `h b`, `h f`, `h h`).
 
 ### mpv (`.config/mpv/`)
 

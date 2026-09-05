@@ -8,6 +8,7 @@ BW_FILE="/tmp/waybar-net-bw"
 
 VPN_UP_COLOR="#88bb88"
 VPN_DOWN_COLOR="#bb5555"
+VPN_TUNNEL_COLOR="#e8912d"   # namespace tunnel up, machine itself not on VPN
 
 fmt_bw() {
     local bytes=$1
@@ -100,15 +101,24 @@ else
 fi
 
 # --- VPN overlay (skip if incognito) ---
-# Recolours the link icon in place; the glyph itself never changes.
-if [[ ! -f "$VPN_INCOGNITO_FILE" ]] && vpn_available && [[ -n "$phys_iface" ]]; then
-    VPN_STATUS=$(vpn_status 1)
-    if vpn_is_connected "$VPN_STATUS"; then
-        RELAY=$(vpn_relay "$VPN_STATUS")
+# Recolours the link icon in place; the glyph itself never changes. Three
+# states, same as vpn-status.sh: green = daemon VPN carries the whole machine,
+# orange = only the namespace tunnel (SUPER ALT B browser) is up, red = neither.
+if [[ ! -f "$VPN_INCOGNITO_FILE" ]] && { vpn_available || vpn_tunnel_installed; } && [[ -n "$phys_iface" ]]; then
+    DAEMON_STATUS=""
+    [[ "$VPN_BACKEND" == daemon ]] && DAEMON_STATUS=$(vpn_status 1)
+    if [[ -n "$DAEMON_STATUS" ]] && vpn_is_connected "$DAEMON_STATUS"; then
+        RELAY=$(vpn_relay "$DAEMON_STATUS")
         COUNTRY_NAME=$(vpn_country_name "$(vpn_relay_country "$RELAY")")
         ICON="<span color='$VPN_UP_COLOR'>$ICON</span>"
         TOOLTIP="$TOOLTIP\\n  $COUNTRY_NAME ($RELAY)"
         CLASS="vpn-connected"
+    elif vpn_tunnel_up; then
+        N=$(vpn_tunnel_count)
+        [[ $N -eq 1 ]] && T="1 tunnel" || T="$N tunnels"
+        ICON="<span color='$VPN_TUNNEL_COLOR'>$ICON</span>"
+        TOOLTIP="$TOOLTIP\\n$VPN_NAME: $T active ($(vpn_tunnel_relay))"
+        CLASS="vpn-tunnel"
     else
         ICON="<span color='$VPN_DOWN_COLOR'>$ICON</span>"
         TOOLTIP="$TOOLTIP\\n$VPN_NAME not connected!"

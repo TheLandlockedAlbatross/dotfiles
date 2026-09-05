@@ -2,7 +2,8 @@
 TARGET="$1"
 [[ $TARGET =~ ^[0-9]+$ ]] || exit 1
 PREV_FILE=/tmp/hypr-workspace-prev
-read -r FOCUSED_MON CURRENT < <(hyprctl monitors -j | jq -r '.[] | select(.focused) | "\(.name) \(.activeWorkspace.id)"')
+MONS_JSON=$(hyprctl monitors -j)
+read -r FOCUSED_MON CURRENT < <(jq -r '.[] | select(.focused) | "\(.name) \(.activeWorkspace.id)"' <<<"$MONS_JSON")
 
 # Self-heal: monitor drops scatter workspaces onto surviving monitors and they
 # never move back on their own. Re-home the target to its rule monitor first.
@@ -31,7 +32,9 @@ if [[ -f $WS_BG_MAP ]]; then
   BG=$(sed -n "${BG_TARGET}p" "$WS_BG_MAP")
   BG_MON="$FOCUSED_MON"
   if [[ -n $BG && -n $BG_MON ]]; then
-    awww img -o "$BG_MON" "$BG" --transition-type none >/dev/null 2>&1
+    # Layout-aware paint (spans/pan/zoom); raw awww when no layout exists.
+    source "$(dirname "$0")/bg-paint.lib.sh"
+    BG_MONITORS_JSON="$MONS_JSON" bg_paint "$BG_MON" "$BG"
     sleep "$(cat /tmp/hypr-workspace-bg-framedur 2>/dev/null || echo 0.03)"
   fi
 fi

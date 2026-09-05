@@ -21,15 +21,13 @@
     "custom/network",
     "pulseaudio",
     "custom/screen-temperature",
-    "custom/screen-brightness",
-    "custom/battery",
-    "custom/power-draw"
+    "custom/screen-brightness"
   ],
   "hyprland/workspaces": {
     "on-click": "activate",
     "format": "{icon}",
     "format-icons": {
-      "default": "",
+      "default": "?",
       "1": "1",
       "2": "2",
       "3": "3",
@@ -115,19 +113,6 @@
     "on-click-right": "~/.config/waybar/network-vpn-action.sh toggle",
     "on-scroll-up": "~/.config/waybar/network-vpn-action.sh next",
     "on-scroll-down": "~/.config/waybar/network-vpn-action.sh prev"
-  },
-  "custom/battery": {
-    "exec": "~/.config/waybar/battery-status.sh",
-    "return-type": "json",
-    "interval": 1,
-    "on-click": "~/.config/waybar/battery-info.sh"
-  },
-  "custom/power-draw": {
-    "format": "{}",
-    "exec": "~/.config/waybar/power-draw.sh",
-    "return-type": "json",
-    "interval": 1,
-    "on-click": "omarchy-menu power"
   },
   "custom/poll-rate": {
     "exec": "~/.config/waybar/poll-rate.sh",

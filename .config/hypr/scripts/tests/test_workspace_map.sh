@@ -7,6 +7,19 @@ MAP="$HOME/.config/hypr/scripts/workspace-map.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export XDG_STATE_HOME="$TMP/state"
+# Belt as well as braces. The script refuses to write these when it is
+# resolving against a hypothetical set of displays, but the suite must not
+# depend on that being true: a build with the guard broken should fail a test,
+# not repoint the rules of the machine it is running on.
+export WS_MAP_CONF="$TMP/monitors.conf"
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/hyprctl" <<STUB
+#!/bin/bash
+echo "hyprctl \$*" >> "$TMP/hyprctl.log"
+echo '[]'
+STUB
+chmod +x "$TMP/bin/hyprctl"
+PATH="$TMP/bin:$PATH"
 
 D3='AOC Q27G3G3R3 QOWP3JA001548'
 D1='AOC Q27G3G3R3 QOWP3JA001705'
@@ -26,6 +39,12 @@ M_DP3=$(mon DP-3 "$D3" 0 1152)
 M_DP1=$(mon DP-1 "$D1" 0 0)
 M_DP2=$(mon DP-2 "$D2" 2048 0)
 M_HDMI=$(mon HDMI-A-1 "$DH" 2048 1152)
+
+# The real rules file must come out of this suite untouched. It has not always:
+# `claim` applies, and applying under a hypothetical set of displays once wrote
+# rules for displays that were not plugged in.
+REAL_CONF="$HOME/.config/hypr/monitors.conf"
+CONF_BEFORE=$(md5sum "$REAL_CONF" 2>/dev/null | cut -d' ' -f1)
 
 pass=0; fail=0
 # check <label> <monitors-json> <ws> <expected "monitor[ default]">
@@ -193,8 +212,221 @@ else
   fail=$((fail + 1)); echo "FAIL slot table changed size"; cat "$XDG_STATE_HOME/hypr/workspace-map-slots"
 fi
 
+# --- align: every display on the same position within its own decade ---------
+
+# focus <layout-json> <connector> <workspace-id>
+focus() {
+  jq -c --arg n "$2" --argjson w "$3" \
+    'map(.activeWorkspace = {id: (if .name == $n then $w else 1 end)}
+         | .focused = (.name == $n))' <<<"$1"
+}
+# wsjson <"id:monitor:windows" ...>
+wsjson() {
+  local spec id m w out=""
+  for spec in "$@"; do
+    IFS=: read -r id m w <<<"$spec"
+    out+=$(jq -nc --argjson i "$id" --arg m "$m" --argjson w "$w" \
+      '{id:$i, monitor:$m, windows:$w}')
+  done
+  jq -sc '.' <<<"$out"
+}
+# align <label> <layout> <focused-mon> <focused-ws> <arg> <workspaces-json> <expected ws sequence>
+align() {
+  local label="$1" json="$2" fm="$3" fw="$4" arg="$5" wsj="$6" want="$7" got
+  got=$(WS_MAP_DRY_RUN=1 WS_MAP_MONITORS_JSON="$(focus "$json" "$fm" "$fw")" \
+    WS_MAP_WORKSPACES_JSON="$wsj" "$MAP" align $arg \
+    | awk '$1 == "dispatch" && $2 == "workspace" {printf "%s ", $3}')
+  got=${got% }
+  if [[ $got == "$want" ]]; then
+    pass=$((pass + 1))
+  else
+    fail=$((fail + 1))
+    printf 'FAIL %-34s want [%s] got [%s]\n' "$label" "$want" "$got"
+  fi
+}
+
+EMPTY=$(wsjson)
+# 16. Position taken from the focused workspace, focused display visited last.
+align "align follows focus" "$ALL" DP-1 23 "" "$EMPTY" "3 13 33 23"
+# 17. Explicit position, and 0 means the tenth slot like the digit row does.
+align "align to position 7" "$ALL" DP-1 23 7 "$EMPTY" "7 17 37 27"
+align "align to position 0" "$ALL" DP-1 23 0 "$EMPTY" "10 20 40 30"
+# 18. A borrowed decade is not aligned: DP-3 is gone, so nothing touches 11-20
+#     and its host only lines up the decade it actually owns.
+align "borrowed decade skipped" "$NO3" DP-1 23 3 "$EMPTY" "3 33 23"
+# 19. Focused somewhere outside the scheme (special workspace): first position.
+align "focus outside the scheme" "$ALL" DP-1 -99 "" "$EMPTY" "1 11 31 21"
+# 20. A display past the decade count owns nothing, so align leaves it alone.
+FIVE=$(layout "$M_DP3 $M_DP1 $M_DP2 $M_HDMI $(mon DP-5 'AOC Q27G3G3R3 QOWP3JA009999' 4096 0)")
+align "fifth display skipped" "$FIVE" DP-1 23 2 "$EMPTY" "2 12 32 22"
+
+# 21. A workspace stranded on the wrong display is pulled home first.
+got=$(WS_MAP_DRY_RUN=1 WS_MAP_MONITORS_JSON="$(focus "$ALL" DP-1 23)" \
+  WS_MAP_WORKSPACES_JSON="$(wsjson 13:HDMI-A-1:2)" "$MAP" align 3 \
+  | grep -c '^dispatch moveworkspacetomonitor 13 DP-3$')
+if [[ $got == 1 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want 1 re-home of ws 13, got %s\n' "align re-homes strays" "$got"
+fi
+
+# 22. Toggle-back records the workspace we left, but only when both ends have
+#     windows, matching workspace-switch.sh.
+got=$(WS_MAP_DRY_RUN=1 WS_MAP_MONITORS_JSON="$(focus "$ALL" DP-1 23)" \
+  WS_MAP_WORKSPACES_JSON="$(wsjson 23:DP-1:2 27:DP-1:1)" "$MAP" align 7 \
+  | awk '$1 == "prev" {print $2}')
+if [[ $got == 23 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want prev 23, got %s\n' "align records toggle-back" "${got:-<none>}"
+fi
+got=$(WS_MAP_DRY_RUN=1 WS_MAP_MONITORS_JSON="$(focus "$ALL" DP-1 23)" \
+  WS_MAP_WORKSPACES_JSON="$(wsjson 23:DP-1:2 27:DP-1:0)" "$MAP" align 7 \
+  | awk '$1 == "prev" {print $2}')
+if [[ -z $got ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want no prev, got %s\n' "align skips empty toggle-back" "$got"
+fi
+
+# 23. Every aligned display is focused exactly once, in the dispatch order.
+got=$(WS_MAP_DRY_RUN=1 WS_MAP_MONITORS_JSON="$(focus "$ALL" DP-1 23)" \
+  WS_MAP_WORKSPACES_JSON="$EMPTY" "$MAP" align 4 \
+  | awk '$1 == "dispatch" && $2 == "focusmonitor" {printf "%s ", $3}')
+if [[ $got == "HDMI-A-1 DP-3 DP-2 DP-1 " ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s got [%s]\n' "align focus order" "$got"
+fi
+
+# 24. preview: the machine-readable version the align picker reads.
+prev() { WS_MAP_MONITORS_JSON="$1" "$MAP" preview; }
+got=$(prev "$ALL" | tr '\t' ' ')
+want="mode decade
+size 10
+HDMI-A-1 1
+DP-3 11
+DP-1 21
+DP-2 31"
+if [[ $got == "$want" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s\nwant:\n%s\ngot:\n%s\n' "preview lists decade starts" "$want" "$got"
+fi
+# A display past the decade count owns nothing, and preview says so with "-".
+got=$(prev "$FIVE" | tr '\t' ' ' | tail -1)
+if [[ $got == "DP-5 -" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want "DP-5 -", got "%s"\n' "preview marks a display with no decade" "$got"
+fi
+# Unplugging does not hand the survivor the missing panel's decade: align only
+# ever moves a display within the decade it owns.
+got=$(prev "$NO3" | tr '\t' ' ' | grep -c '^DP-3')
+if [[ $got == 0 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want no DP-3 row, got %s\n' "preview drops an unplugged display" "$got"
+fi
+
+# 25. claim: a replaced panel takes the decade its predecessor still holds.
+CLAIM_STATE="$TMP/claim"; mkdir -p "$CLAIM_STATE"
+claim_env() { XDG_STATE_HOME="$CLAIM_STATE" WS_MAP_MONITORS_JSON="$1" "$MAP" "${@:2}"; }
+DZ='AOC Q27G3G3R3 QOWP3JA00ZZZZ'
+M_DP3_NEW=$(mon DP-3 "$DZ" 0 1152)
+REPLACED=$(layout "$M_DP3_NEW $M_DP1 $M_DP2 $M_HDMI")
+
+claim_env "$ALL" plan >/dev/null                     # seed from the full set
+got=$(claim_env "$REPLACED" slots | grep -c '^no decade')
+if [[ $got == 1 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want 1 homeless display, got %s\n' "replacement starts homeless" "$got"
+fi
+got=$(claim_env "$REPLACED" slots | grep -c 'held by a panel that is not here')
+if [[ $got == 1 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want the advisory, got %s\n' "advisory names the fixable case" "$got"
+fi
+
+claim_env "$REPLACED" claim >/dev/null 2>&1
+got=$(claim_env "$REPLACED" slots | grep -c '^no decade')
+if [[ $got == 0 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want none homeless after claim, got %s\n' "claim rehomes the replacement" "$got"
+fi
+# It takes the decade it was already showing (11-20), so nothing on screen moves.
+got=$(claim_env "$REPLACED" slots | awk '/^ws 11-20/ {print $4, $5, $6}')
+if [[ $got == "$DZ" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want the hosted decade, got "%s"\n' "claim takes the decade it shows" "$got"
+fi
+
+# With two decades going spare it still takes the one it is showing, and leaves
+# the other with its absent owner rather than hoarding both.
+TWO_STATE="$TMP/twoghosts"; mkdir -p "$TWO_STATE"
+THREE=$(layout "$M_DP3_NEW $M_DP2 $M_HDMI")
+two() { XDG_STATE_HOME="$TWO_STATE" WS_MAP_MONITORS_JSON="$1" "$MAP" "${@:2}"; }
+XDG_STATE_HOME="$TWO_STATE" WS_MAP_MONITORS_JSON="$ALL" "$MAP" plan >/dev/null
+two "$THREE" claim >/dev/null 2>&1
+got=$(two "$THREE" slots | awk '/^ws 11-20/ {print $4, $5, $6}')
+if [[ $got == "$DZ" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want the shown decade, got "%s"\n' "claim takes the lower spare decade" "$got"
+fi
+got=$(two "$THREE" slots | awk '/^ws 21-30/ {print $4, $5, $6}')
+if [[ $got == "$D1" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want the absent owner kept, got "%s"\n' "claim takes only one decade" "$got"
+fi
+got=$(wc -l < "$CLAIM_STATE/hypr/workspace-map-slots")
+if [[ $got == 4 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want 4 owners, got %s\n' "claim leaves no ghost behind" "$got"
+fi
+# Claiming again has nothing to do.
+got=$(claim_env "$REPLACED" claim 2>&1 | grep -c .)
+before=$(cat "$CLAIM_STATE/hypr/workspace-map-slots")
+claim_env "$REPLACED" claim >/dev/null 2>&1
+if [[ $before == "$(cat "$CLAIM_STATE/hypr/workspace-map-slots")" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s the table moved on a second claim\n' "claim is idempotent"
+fi
+# A display merely unplugged for a moment keeps its decade: nothing is homeless,
+# so there is nothing to hand over.
+before=$(cat "$CLAIM_STATE/hypr/workspace-map-slots")
+claim_env "$NO3" claim >/dev/null 2>&1
+if [[ $before == "$(cat "$CLAIM_STATE/hypr/workspace-map-slots")" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s an unplugged panel lost its decade\n' "claim spares a temporary unplug"
+fi
+# More displays than decades, every owner present: still nothing to hand over.
+FIVE_STATE="$TMP/five"; mkdir -p "$FIVE_STATE"
+XDG_STATE_HOME="$FIVE_STATE" WS_MAP_MONITORS_JSON="$FIVE" "$MAP" plan >/dev/null
+before=$(cat "$FIVE_STATE/hypr/workspace-map-slots")
+XDG_STATE_HOME="$FIVE_STATE" WS_MAP_MONITORS_JSON="$FIVE" "$MAP" claim >/dev/null 2>&1
+if [[ $before == "$(cat "$FIVE_STATE/hypr/workspace-map-slots")" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s claim took a decade from a live panel\n' "claim spares live owners"
+fi
+got=$(XDG_STATE_HOME="$FIVE_STATE" WS_MAP_MONITORS_JSON="$FIVE" "$MAP" slots | grep -c 'beyond the 4 decades')
+if [[ $got == 1 ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want the over-capacity advisory, got %s\n' "advisory tells the two cases apart" "$got"
+fi
+
+# 26. Nothing durable happens while resolving against displays you do not have.
+GUARD_DIR="$TMP/guard"; mkdir -p "$GUARD_DIR/bin"
+cat > "$GUARD_DIR/bin/hyprctl" <<STUB
+#!/bin/bash
+echo "hyprctl \$*" >> "$GUARD_DIR/hyprctl.log"
+echo '[]'
+STUB
+chmod +x "$GUARD_DIR/bin/hyprctl"
+guard_out=$(PATH="$GUARD_DIR/bin:$PATH" WS_MAP_CONF="$GUARD_DIR/monitors.conf" \
+  WS_MAP_MONITORS_JSON="$ALL" "$MAP" apply 2>&1)
+if [[ ! -e $GUARD_DIR/monitors.conf ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s wrote a rules file it should not have\n' "what-if apply writes no file"
+fi
+if [[ ! -s $GUARD_DIR/hyprctl.log ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s talked to the compositor: %s\n' "what-if apply is silent" "$(head -1 "$GUARD_DIR/hyprctl.log")"
+fi
+if [[ $guard_out == *"what-if"* ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s want a what-if note, got "%s"\n' "what-if apply says so" "$guard_out"
+fi
+# claim applies too, so it inherits the same guard.
+: > "$GUARD_DIR/hyprctl.log"
+PATH="$GUARD_DIR/bin:$PATH" WS_MAP_CONF="$GUARD_DIR/monitors.conf" \
+  XDG_STATE_HOME="$CLAIM_STATE" WS_MAP_MONITORS_JSON="$REPLACED" "$MAP" claim >/dev/null 2>&1
+if [[ ! -e $GUARD_DIR/monitors.conf && ! -s $GUARD_DIR/hyprctl.log ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); printf 'FAIL %-34s claim wrote through the guard\n' "what-if claim writes nothing"
+fi
+
 echo "=== sample: DP-3 and DP-1 unplugged ==="
 WS_MAP_MONITORS_JSON="$NO31" "$MAP" slots
+
+# The canary, checked last so it covers everything above.
+CONF_AFTER=$(md5sum "$REAL_CONF" 2>/dev/null | cut -d' ' -f1)
+if [[ $CONF_BEFORE == "$CONF_AFTER" ]]; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+  printf 'FAIL %-34s the suite modified %s\n' "real rules file untouched" "$REAL_CONF"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

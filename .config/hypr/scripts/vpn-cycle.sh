@@ -116,19 +116,12 @@ wait_for_connected() {
     done
 }
 
-# --- Disconnected: connect to nearest relay ---
+# --- Disconnected: report, never connect ---
+# Connecting is SUPER SHIFT CTRL ALT M's job alone (both backends). Cycling
+# while disconnected used to silently connect to the nearest relay; now it just
+# says what state you are in and leaves it.
 if [[ "$IS_CONNECTED" == "no" ]]; then
-    LOC="${RELAYS[0]}"
-    "$SWAYOSD" --custom-icon network-error --custom-message "$VPN_NAME Connecting..."
-    if ! vpn_set_location "$LOC"; then
-        err "$VPN_NAME: Failed to set relay $LOC"
-    fi
-    if ! vpn_connect; then
-        err "$VPN_NAME: Connect failed — check internet connection"
-    fi
-    wait_for_connected
-    R=$(vpn_relay)
-    "$SWAYOSD" --custom-icon security-high --custom-message "$VPN_NAME Connected ($R) [1/$COUNT]"
+    "$SWAYOSD" --custom-icon network-error --custom-message "$VPN_NAME Disconnected"
     exit 0
 fi
 
