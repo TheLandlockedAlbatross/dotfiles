@@ -219,8 +219,9 @@ do_disable() {
   rm -f "$LOCK_MARK" "$ARRANGE_FILE"
   pkill -x awww-daemon 2>/dev/null
   sleep 0.1
-  pkill -x swaybg 2>/dev/null
-  setsid uwsm-app -- swaybg -i "$CURRENT_BG_LINK" -m fill >/dev/null 2>&1 &
+  # Painter honors the span toggle (stretch across all displays vs per-display
+  # fill); it also kills any leftover swaybg itself.
+  "$SCRIPT_DIR/background-span.sh" paint
 }
 
 cmd_toggle() {
@@ -282,7 +283,11 @@ cmd_paint_arrangement() {
 # Called from Hyprland autostart; restores the previously-toggled state
 # without surfacing a notification.
 cmd_startup() {
-  [[ -f $STATE_FILE ]] || return 0
+  if [[ ! -f $STATE_FILE ]]; then
+    # Disabled mode: repaint over the autostart swaybg when span mode is on.
+    [[ -f ~/.local/state/background-span-on ]] && "$SCRIPT_DIR/background-span.sh" paint
+    return 0
+  fi
   do_enable
 }
 
