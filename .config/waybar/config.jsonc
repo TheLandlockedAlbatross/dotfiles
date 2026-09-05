@@ -123,7 +123,7 @@
     "on-click": "omarchy-launch-floating-terminal-with-presentation omarchy-weather-location"
   },
   "hyprland/language": {
-    "format": "{short}"
+    "format": "󰌌 {short}"
   },
   "custom/agents": {
     "exec": "~/.config/waybar/agents.sh",
