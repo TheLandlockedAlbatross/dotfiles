@@ -10,6 +10,11 @@
 #   HISTORY_SCOPE / HISTORY_SCOPE_ZSH = local (default) | global
 #       local:  use ./.zsh_history if it exists and cwd != HOME, else ~/.zsh_history
 #       global: always ~/.zsh_history
+#
+# `h help` lists the h subcommands (swap/back to a directory's HISTFILE without writing to any
+# history file, remove to delete entries, file for status; each has a single-letter alias);
+# `hh` switches HISTFILE for real. Ctrl+R fzf-searches the same merged shell-tagged view
+# (zsh-only in shell mode), read-only: picking an entry just puts it on the command line.
 ####################################################################################################
 
 # Shared HISTFILE settings, applied at startup and by hh when switching HISTFILE
@@ -40,39 +45,198 @@ else
 fi
 _hist_apply_settings
 
+# Files the merged view (and h rm) should look at: zsh's is the live HISTFILE so h swap/hh are
+# reflected; bash/fish mirror hist-merge's own env-var resolution. Fills the _h_specs array.
+_h_merge_specs() {
+    local bscope="${HISTORY_SCOPE_BASH:-${HISTORY_SCOPE:-local}}"
+    local bfile="${HOME}/.bash_history"
+    [[ "${bscope}" == "local" && -f "${PWD}/.bash_history" && "${PWD}" != "${HOME}" ]] && bfile="${PWD}/.bash_history"
+    _h_specs=("zsh:${HISTFILE:-${HOME}/.zsh_history}" "bash:${bfile}" "fish:${HOME}/.local/share/fish/fish_history")
+}
+
+# h file (and the tail of h help): the current history file of each shell, as the merged view
+# resolves them, with swap status for this shell and a flag for files that don't exist yet
+_h_files() {
+    local -a _h_specs
+    _h_merge_specs
+    local spec sh path note
+    for spec in "${_h_specs[@]}"; do
+        sh="${spec%%:*}"
+        path="${spec#*:}"
+        note=""
+        if [[ "${sh}" == "zsh" ]]; then
+            note="this shell"
+            (( ${_h_swap_depth:-0} > 0 )) && note+="; swapped read-only, depth ${_h_swap_depth}: 'h back' returns"
+        fi
+        [[ -f "${path}" ]] || note+="${note:+; }missing"
+        printf '    %-5s %s%s\n' "${sh}:" "${path}" "${note:+ (${note})}"
+    done
+}
+
+# h swap/back: read-only HISTFILE switch. fc -p pushes the current history list onto zsh's
+# history stack and loads the target with SAVEHIST=0, so nothing is written to any history file
+# while swapped (not even by SHARE_HISTORY); fc -P restores the previous list untouched.
+_h_swap() {
+    local target="${1:-${PWD}/.zsh_history}"
+    if [[ ! -f "${target}" ]]; then
+        echo "h swap: no history file at ${target} (hh creates a real local HISTFILE)"
+        return 1
+    fi
+    fc -p "${target}" "${HISTSIZE}" 0
+    _h_swap_depth=$(( ${_h_swap_depth:-0} + 1 ))
+    echo "Swapped to ${target} (read-only: commands typed now are saved nowhere). 'h back' returns."
+}
+
+_h_back() {
+    if (( ${_h_swap_depth:-0} == 0 )); then
+        echo "h back: no swap active"
+        return 1
+    fi
+    fc -P
+    _h_swap_depth=$(( _h_swap_depth - 1 ))
+    local extra=""
+    (( _h_swap_depth > 0 )) && extra=" (still ${_h_swap_depth} swap(s) deep)"
+    echo "Back on ${HISTFILE}${extra}"
+}
+
+# h remove: delete history entries, addressed by the numbers h displays. Edits the history files
+# (agnostic mode can hit zsh/bash/fish files via hist-merge --lines; shell mode matches the fc
+# entry's text in HISTFILE). Running shells may still hold deleted entries in memory.
+_h_rm() {
+    local mode="${HISTORY_MODE_ZSH:-${HISTORY_MODE:-agnostic}}"
+    local merge="${HOME}/.config/shell/hist-merge"
+    [[ -x "${merge}" ]] || mode="shell"
+    if (( $# == 0 )); then
+        echo "h remove: pass one or more entry numbers (as shown by h)"
+        return 1
+    fi
+    local n
+    for n in "$@"; do
+        if [[ "${n}" != <-> ]]; then
+            echo "h remove: '${n}' is not an entry number"
+            return 1
+        fi
+    done
+    local fish_hit=0 deleted=0
+    if [[ "${mode}" == "agnostic" ]]; then
+        local -a _h_specs
+        _h_merge_specs
+        local out
+        out="$("${merge}" --lines "${(j:,:)@}" "${_h_specs[@]}")"
+        local -A ranges found
+        local num file s e c
+        while IFS=$'\t' read -r num file s e c; do
+            [[ -n "${num}" ]] || continue
+            found[${num}]=1
+            ranges[${file}]+="${s},${e}d;"
+            [[ "${file}" == *fish_history ]] && fish_hit=1
+            print -r -- "rm ${num}: [${file/#${HOME}/~}] ${c}"
+        done <<< "${out}"
+        for n in "$@"; do
+            [[ -n "${found[${n}]:-}" ]] || echo "h remove: no entry ${n}"
+        done
+        (( ${#ranges} )) || return 1
+        for file in "${(@k)ranges}"; do
+            sed -i "${ranges[${file}]%;}" "${file}"
+        done
+        deleted=1
+    else
+        local text range
+        for n in "$@"; do
+            text="$(fc -ln "${n}" "${n}" 2>/dev/null)"
+            if [[ -z "${text}" ]]; then
+                echo "h remove: no entry ${n}"
+                continue
+            fi
+            # Find the last entry in HISTFILE whose text matches, comparing in fc -ln form:
+            # continuation lines of a multi-line entry joined with a literal backslash-n,
+            # per-line whitespace trimmed. The range covers all continuation lines.
+            range="$(TARGET="${text}" awk '
+                function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+                function joined(c,   m, arr, j, o) {
+                    m = split(c, arr, "\001"); o = ""
+                    for (j = 1; j <= m; j++) o = o (j > 1 ? "\\n" : "") trim(arr[j])
+                    return o
+                }
+                function check() { if (have && joined(cmd) == t) { ms = rstart; me = rend } have = 0 }
+                BEGIN { t = trim(ENVIRON["TARGET"]) }
+                {
+                    line = $0
+                    iscont = (line ~ /\\$/)
+                    if (iscont) sub(/\\$/, "", line)
+                    if (cont) {
+                        cmd = cmd "\001" line; rend = NR
+                    } else {
+                        check()
+                        sub(/^: [0-9]+:[0-9]+;/, "", line)
+                        cmd = line; rstart = NR; rend = NR; have = 1
+                    }
+                    cont = iscont
+                }
+                END { check(); if (ms) print ms "," me }
+            ' "${HISTFILE}")"
+            if [[ -n "${range}" ]]; then
+                print -r -- "rm ${n}: ${text}"
+                sed -i "${range}d" "${HISTFILE}"
+                deleted=1
+            else
+                echo "h remove: entry ${n} not found in ${HISTFILE}"
+            fi
+        done
+    fi
+    (( deleted )) && echo "(files updated; running shells may still hold deleted entries in memory)"
+    (( fish_hit )) && echo "(fish rewrites its own file: fish entries can come back until fish restarts)"
+    return 0
+}
+
 # fc aliases
 h_func() {
     usage() {
             cat <<EOF
-h: various fc aliases for convenience
+h: various history helpers
 USAGE:
-    h
-    h [text]
-    h [number]
-    h [number] .
-    h [number] b
-    h -h | --help
-
-Options:
-If passed nothing, print HISTFILE
-If passed text, search for it in HISTFILE for with ripgrep
-If passed number, print out that line # of HISTFILE
-If passed number + '.', run command at that line number of HISTFILE
-If passed number + 'b', run command at that line number of HISTFILE in background
-if passed -h, --help, show this help message
+    h                        list history
+    h [text]                 search history with ripgrep
+    h [number]               print that history entry
+    h [number] .             run that history entry
+    h [number] b             run that history entry in background
+    h r|remove <n> [<n>...]  delete entries (numbers as shown by h) from their history files
+    h s|swap [file]          switch to ./.zsh_history (or file), read-only: nothing is
+                             written to any history file until you swap back
+    h b|back                 undo the last swap (commands typed while swapped are discarded)
+    h f|file                 list each shell's current history file (and swap status)
+    h h|help | -h | --help   show this help message
 
 Mode (HISTORY_MODE_ZSH, then HISTORY_MODE; default agnostic):
 agnostic = read-only merged view across zsh/bash/fish via hist-merge; shell = zsh only
+
+Notes:
+    Delete several entries in one h remove call: the numbers shift after a deletion.
+    h remove edits the files only; running shells may keep deleted entries in memory.
+    h swap is the read-only counterpart of hh (which switches HISTFILE for real).
+    The subcommand words and letters are reserved; to search one literally: h '(swap)'
+
+Current history files:
 EOF
+            _h_files
     }
     local mode="${HISTORY_MODE_ZSH:-${HISTORY_MODE:-agnostic}}"
     local merge="${HOME}/.config/shell/hist-merge"
     [[ -x "${merge}" ]] || mode="shell"
+    case "${1}" in
+        h|help|-h|--help) usage; return 0 ;;
+        r|rm|remove) shift; _h_rm "$@"; return $? ;;
+        s|swap)      _h_swap "${2}"; return $? ;;
+        b|back)      _h_back; return $? ;;
+        f|file) _h_files; return 0 ;;
+    esac
+    local -a _h_specs
+    _h_merge_specs
     if [[ -n "${1}" ]]; then
         if [[ "${1}" == <-> ]]; then
             local res
             if [[ "${mode}" == "agnostic" ]]; then
-                res=$("${merge}" --raw "${1}")
+                res=$("${merge}" --raw "${1}" "${_h_specs[@]}")
             else
                 res=$(fc -ln "${1}" "${1}")
             fi
@@ -85,18 +249,16 @@ EOF
             else
                 usage
             fi
-        elif [[ "${1}" == '--help' || "${1}" == '-h' ]]; then
-            usage
         else
             if [[ "${mode}" == "agnostic" ]]; then
-                "${merge}" | rg "${1}"
+                "${merge}" "${_h_specs[@]}" | rg "${1}"
             else
                 fc -lf 1 | rg "${1}"
             fi
         fi
     else
         if [[ "${mode}" == "agnostic" ]]; then
-            "${merge}"
+            "${merge}" "${_h_specs[@]}"
         else
             fc -lf 1
         fi
@@ -162,6 +324,35 @@ EOF
     echo "Switched HISTFILE to ${HISTFILE} from ${OLD_HISTFILE}"
 }
 alias hh='hh_func '
+
+# Ctrl+R: fzf over the merged, shell-tagged history (agnostic mode; same files h uses, so
+# swaps and local HISTFILEs are respected). Read-only: picking an entry only puts it on the
+# command line. Shell mode falls back to zsh's incremental search.
+_h_fzf_search() {
+    local mode="${HISTORY_MODE_ZSH:-${HISTORY_MODE:-agnostic}}"
+    local merge="${HOME}/.config/shell/hist-merge"
+    [[ -x "${merge}" ]] || mode="shell"
+    if [[ "${mode}" != "agnostic" ]]; then
+        zle history-incremental-search-backward
+        return
+    fi
+    local -a _h_specs
+    _h_merge_specs
+    local selection num
+    selection="$("${merge}" "${_h_specs[@]}" | tac \
+        | fzf --no-multi --scheme=history --query="${BUFFER}" \
+              --header='merged zsh/bash/fish history (read-only)')"
+    if [[ -n "${selection}" ]]; then
+        num="${${(z)selection}[1]}"
+        BUFFER="$("${merge}" --raw "${num}" "${_h_specs[@]}")"
+        CURSOR=${#BUFFER}
+    fi
+    zle reset-prompt
+}
+if (( $+commands[fzf] )); then
+    zle -N _h_fzf_search
+    bindkey '^R' _h_fzf_search
+fi
 
 # History search bindings
 autoload -U up-line-or-beginning-search
