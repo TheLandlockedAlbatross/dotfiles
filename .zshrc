@@ -94,10 +94,31 @@ fi
 znap source agkozak/zsh-z
 
 ####################################################################################################
+# Keybindings
+####################################################################################################
+# Word-wise editing (alacritty CSI sequences). WORDCHARS without '/' so
+# word ops stop at path components instead of eating whole paths.
+WORDCHARS="${WORDCHARS//\//}"
+bindkey '^[[3~' delete-char           # Delete
+bindkey '^[[3;5~' kill-word           # Ctrl+Delete
+bindkey '^H' backward-kill-word       # Ctrl+Backspace
+bindkey '^[[1;5C' forward-word        # Ctrl+Right
+bindkey '^[[1;5D' backward-word       # Ctrl+Left
+
+####################################################################################################
 # Custom
 ####################################################################################################
 export ZSH_CUSTOM="${ZSH}/custom"
 mkdir -p "${ZSH_CUSTOM}"
+
+# Omarchy's interactive layer: envs, aliases, and functions are zsh-compatible, so source the
+# live files (their updates flow through); shell/init stay bash-only (bash-completion, bind,
+# bash-specific inits). Sourced before the custom files below so those can override.
+if [[ -d ~/.local/share/omarchy/default/bash ]]; then
+    source ~/.local/share/omarchy/default/bash/envs
+    source ~/.local/share/omarchy/default/bash/aliases
+    source ~/.local/share/omarchy/default/bash/functions
+fi
 
 # Get my custom aliases etc
 #source <(cat "${ZSH}/custom/"*.zsh)
