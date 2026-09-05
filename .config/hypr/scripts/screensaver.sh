@@ -11,8 +11,6 @@ pgrep -f org.omarchy.screensaver && exit 0
 # Respect screensaver toggle
 [[ -f ~/.local/state/omarchy/toggles/screensaver-off ]] && exit 1
 
-walker -q
-
 launch_on_monitor() {
   local m="$1"
   local terminal
@@ -56,18 +54,18 @@ if (( N <= 1 )); then
     launch_on_monitor "$m"
   done
 else
-  # Multi-monitor: show picker
-  menu=""
+  # Multi-monitor: show picker (walker retired in omarchy 4; use the shell menu)
+  options=()
   for name in $(hyprctl monitors -j | jq -r '.[] | select(.disabled == false) | .name'); do
     if [[ "$name" == "$focused" ]]; then
-      menu+="$name (focused)"$'\n'
+      options+=("$name (focused)")
     else
-      menu+="$name"$'\n'
+      options+=("$name")
     fi
   done
-  menu+="All"
+  options+=("All")
 
-  choice=$(echo -n "$menu" | walker -d -p "Screensaver") || exit 0
+  choice=$(omarchy-menu-select "Screensaver" "${options[@]}") || exit 0
   choice="${choice%% (*}"  # strip " (focused)" suffix
 
   if [[ "$choice" == "All" ]]; then
