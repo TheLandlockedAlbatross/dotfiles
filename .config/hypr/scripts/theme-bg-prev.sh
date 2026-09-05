@@ -12,8 +12,6 @@ TOTAL=${#BACKGROUNDS[@]}
 
 if (( TOTAL == 0 )); then
   notify-send "No background was found for theme" -t 2000
-  pkill -x swaybg
-  setsid uwsm-app -- swaybg --color '#000000' >/dev/null 2>&1 &
 else
   if [[ -L $CURRENT_BACKGROUND_LINK ]]; then
     CURRENT_BACKGROUND=$(readlink "$CURRENT_BACKGROUND_LINK")
@@ -36,8 +34,7 @@ else
     NEW_BACKGROUND="${BACKGROUNDS[$PREV_INDEX]}"
   fi
 
-  ln -nsf "$NEW_BACKGROUND" "$CURRENT_BACKGROUND_LINK"
-
-  pkill -x swaybg
-  setsid uwsm-app -- swaybg -i "$CURRENT_BACKGROUND_LINK" -m fill >/dev/null 2>&1 &
+  # v4: bg-set updates the link and notifies the shell background service;
+  # the background-span watcher picks the change up for spanned swaybg slices.
+  omarchy-theme-bg-set "$NEW_BACKGROUND"
 fi
