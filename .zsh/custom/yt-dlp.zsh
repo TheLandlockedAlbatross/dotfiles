@@ -11,10 +11,12 @@ yt-dlp-OPUS() {
         echo "Usage: yt-dlp-OPUS <url> [start] [end] [name]"
         return 1
     fi
-    local -a section cookies
-    if [[ -n "$start" || -n "$end" ]]; then
-        section=(--download-sections "*${start:-0}-${end:-inf}" --force-keyframes-at-cuts)
-    fi
+    # Trimming happens LOCALLY in the ffmpeg stage below: --download-sections
+    # makes ffmpeg fetch the googlevideo URL itself, which 403s now that PO
+    # tokens bind URLs to yt-dlp's client context. Audio is small; grab whole.
+    local -a trim cookies
+    [[ -n "$start" ]] && trim+=(-ss "$start")
+    [[ -n "$end" ]] && trim+=(-to "$end")
     # Age-gated videos: set YTDLP_COOKIE_PROFILE (e.g. "firefox:default-release")
     # in machine-local config (~/.zsh/local.zsh); unset = no cookies, portable.
     [[ -n "${YTDLP_COOKIE_PROFILE}" ]] && cookies=(--cookies-from-browser "${YTDLP_COOKIE_PROFILE}")
@@ -31,9 +33,13 @@ yt-dlp-OPUS() {
     # Two stages: download the canonical best audio stream untouched (whatever
     # codec yt-dlp ranks highest), then make the .opus ourselves with ffmpeg —
     # stream-copied when the source is already Opus, else libopus 192k.
+    # mweb client: as of 2026-09, web/web_creator gvs URLs 403 on age-gated
+    # data even with valid PO tokens; mweb + cookies + PO provider works.
+    # Revisit (drop the extractor-args) when the default client recovers.
     yt-dlp -f bestaudio \
         --embed-metadata \
-        "${section[@]}" "${cookies[@]}" \
+        --extractor-args "youtube:player_client=mweb" \
+        "${cookies[@]}" \
         -o "${name}.dl.%(ext)s" \
         "$url" || return 1
 
@@ -46,9 +52,9 @@ yt-dlp-OPUS() {
     local codec
     codec=$(ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$src")
     if [[ "$codec" == "opus" ]]; then
-        ffmpeg -loglevel error -i "$src" -map_metadata 0 -c:a copy "${name}.opus"
+        ffmpeg -loglevel error "${trim[@]}" -i "$src" -map_metadata 0 -c:a copy "${name}.opus"
     else
-        ffmpeg -loglevel error -i "$src" -map_metadata 0 -c:a libopus -b:a 192k "${name}.opus"
+        ffmpeg -loglevel error "${trim[@]}" -i "$src" -map_metadata 0 -c:a libopus -b:a 192k "${name}.opus"
     fi && rm -- "$src" && echo "→ ${name}.opus (source codec: ${codec})"
 }
 
