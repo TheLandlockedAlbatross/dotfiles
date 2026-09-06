@@ -1,3 +1,50 @@
+# Same pipeline as yt-dlp-OPUS but the ffmpeg stage produces uncompressed WAV
+# (pcm_s16le at 48kHz, YouTube's native rate — no resample). Naming, trimming,
+# {} placeholder, cookies and the mweb workaround all behave identically.
+#   yt-dlp-WAV <url> [start] [end] [name]
+yt-dlp-WAV() {
+    local url="$1" start="$2" end="$3" name="$4"
+    if [[ -z "$url" ]]; then
+        echo "Usage: yt-dlp-WAV <url> [start] [end] [name]"
+        return 1
+    fi
+    local -a trim cookies
+    [[ -n "$start" ]] && trim+=(-ss "$start")
+    [[ -n "$end" ]] && trim+=(-to "$end")
+    [[ -n "${YTDLP_COOKIE_PROFILE}" ]] && cookies=(--cookies-from-browser "${YTDLP_COOKIE_PROFILE}")
+    if [[ -z "$name" || "$name" == *"{}"* ]]; then
+        local title default_name
+        title=$(yt-dlp --get-title --no-playlist "${cookies[@]}" "$url" | head -n 1)
+        default_name=$(echo "$title" | tr -cd '[:alnum:] _-' | tr ' ' '_')
+        [[ -z "$default_name" ]] && default_name="audio"
+        if [[ -n "$start" || -n "$end" ]]; then
+            default_name+="_${${start:-0}//:/.}-${${end:-end}//:/.}"
+        fi
+        if [[ -z "$name" ]]; then
+            name="$default_name"
+        else
+            name="${name//\{\}/$default_name}"
+        fi
+    fi
+    yt-dlp -f bestaudio \
+        --embed-metadata \
+        --extractor-args "youtube:player_client=mweb" \
+        "${cookies[@]}" \
+        -o "${name}.dl.%(ext)s" \
+        "$url" || return 1
+
+    local -a dl_files=( "${name}".dl.*(N) )
+    if (( ${#dl_files} == 0 )); then
+        echo "yt-dlp-WAV: download produced no file"
+        return 1
+    fi
+    local src="${dl_files[1]}"
+    local codec
+    codec=$(ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$src")
+    ffmpeg -loglevel error "${trim[@]}" -i "$src" -c:a pcm_s16le -ar 48000 "${name}.wav" \
+        && rm -- "$src" && echo "→ ${name}.wav (source codec: ${codec})"
+}
+
 # Audio only, best quality, Opus (native stream preferred so opus->opus is a
 # copy, not a re-encode). Optional start/end accept any yt-dlp time syntax
 # (90, 1:30, 00:01:30.5); omit both for the whole track, omit end to run to
