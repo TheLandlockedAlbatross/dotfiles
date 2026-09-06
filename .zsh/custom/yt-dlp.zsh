@@ -20,14 +20,21 @@ yt-dlp-OPUS() {
     # Age-gated videos: set YTDLP_COOKIE_PROFILE (e.g. "firefox:default-release")
     # in machine-local config (~/.zsh/local.zsh); unset = no cookies, portable.
     [[ -n "${YTDLP_COOKIE_PROFILE}" ]] && cookies=(--cookies-from-browser "${YTDLP_COOKIE_PROFILE}")
-    if [[ -z "$name" ]]; then
-        local title
+    # {} in a custom name expands to the default name (sanitized title, plus
+    # the time range when trimming): yt-dlp-OPUS <url> 1:30 4:45 'clips_{}'
+    if [[ -z "$name" || "$name" == *"{}"* ]]; then
+        local title default_name
         title=$(yt-dlp --get-title --no-playlist "${cookies[@]}" "$url" | head -n 1)
         # Same sanitizer as yt-dlp-FULL_ARCHIVE: alnum, space, _ and - survive
-        name=$(echo "$title" | tr -cd '[:alnum:] _-' | tr ' ' '_')
-        [[ -z "$name" ]] && name="audio"
+        default_name=$(echo "$title" | tr -cd '[:alnum:] _-' | tr ' ' '_')
+        [[ -z "$default_name" ]] && default_name="audio"
         if [[ -n "$start" || -n "$end" ]]; then
-            name+="_${${start:-0}//:/.}-${${end:-end}//:/.}"
+            default_name+="_${${start:-0}//:/.}-${${end:-end}//:/.}"
+        fi
+        if [[ -z "$name" ]]; then
+            name="$default_name"
+        else
+            name="${name//\{\}/$default_name}"
         fi
     fi
     # Two stages: download the canonical best audio stream untouched (whatever
