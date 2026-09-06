@@ -1,12 +1,14 @@
 # Audio only, best quality, Opus (native stream preferred so opus->opus is a
 # copy, not a re-encode). Optional start/end accept any yt-dlp time syntax
 # (90, 1:30, 00:01:30.5); omit both for the whole track, omit end to run to
-# the end of the video.
-#   yt-dlp-OPUS <url> [start] [end]
+# the end of the video. Default filename is the sanitized video title, plus
+# the time range when trimming (":" becomes "." for the filesystem); a fourth
+# argument overrides the name entirely.
+#   yt-dlp-OPUS <url> [start] [end] [name]
 yt-dlp-OPUS() {
-    local url="$1" start="$2" end="$3"
+    local url="$1" start="$2" end="$3" name="$4"
     if [[ -z "$url" ]]; then
-        echo "Usage: yt-dlp-OPUS <url> [start] [end]"
+        echo "Usage: yt-dlp-OPUS <url> [start] [end] [name]"
         return 1
     fi
     local -a section cookies
@@ -16,11 +18,21 @@ yt-dlp-OPUS() {
     # Age-gated videos: set YTDLP_COOKIE_PROFILE (e.g. "firefox:default-release")
     # in machine-local config (~/.zsh/local.zsh); unset = no cookies, portable.
     [[ -n "${YTDLP_COOKIE_PROFILE}" ]] && cookies=(--cookies-from-browser "${YTDLP_COOKIE_PROFILE}")
+    if [[ -z "$name" ]]; then
+        local title
+        title=$(yt-dlp --get-title --no-playlist "${cookies[@]}" "$url" | head -n 1)
+        # Same sanitizer as yt-dlp-FULL_ARCHIVE: alnum, space, _ and - survive
+        name=$(echo "$title" | tr -cd '[:alnum:] _-' | tr ' ' '_')
+        [[ -z "$name" ]] && name="audio"
+        if [[ -n "$start" || -n "$end" ]]; then
+            name+="_${${start:-0}//:/.}-${${end:-end}//:/.}"
+        fi
+    fi
     yt-dlp -f "bestaudio[acodec^=opus]/bestaudio" \
         -x --audio-format opus --audio-quality 0 \
         --embed-metadata \
         "${section[@]}" "${cookies[@]}" \
-        -o "%(title)s [%(id)s].%(ext)s" \
+        -o "${name}.%(ext)s" \
         "$url"
 }
 
