@@ -1,0 +1,9 @@
+[Unit]
+Description=BgUtils PO token provider server for yt-dlp
+
+[Service]
+ExecStart=/usr/bin/bgutil-pot server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -114,6 +114,9 @@
 !.config/tmux/tmux.conf
 !.config/herdr/
 !.config/herdr/config.toml
+!.config/systemd/
+!.config/systemd/user/
+!.config/systemd/user/bgutil-pot.service
 !.config/yazi/
 !.config/yazi/yazi.toml
 !.config/btop/
