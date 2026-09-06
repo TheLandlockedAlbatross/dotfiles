@@ -174,7 +174,7 @@ Item {
         label: "Run “" + raw + "”",
         subtext: raw,
         exec: raw,
-        icon: root.iconForProgram(root.programOf(raw)),
+        icon: "",
         file: "",
         section: "custom",
         lastUsed: 0,
@@ -209,7 +209,7 @@ Item {
           label: name,
           subtext: String(found[j].dir || "") + "/" + name,
           exec: name,
-          icon: String(found[j].icon || ""),
+          icon: "",
           file: "",
           section: "path",
           lastUsed: 0,
@@ -237,7 +237,7 @@ Item {
       label: String(row.label || ""),
       subtext: String(row.subtext || ""),
       exec: String(row.exec || ""),
-      icon: String(row.icon || ""),
+      icon: root.iconForRow(row),
       file: String(row.file || ""),
       section: String(row.section || ""),
       lastUsed: Number(row.lastUsed || 0),
@@ -326,7 +326,11 @@ Item {
     root.rebuildDisplay()
   }
 
-  // Commands without a desktop entry of their own get the theme's terminal icon.
+  // Icons come from the same base as the launcher's app rows: the shell's
+  // DesktopEntries, drawn through appLibrary.iconSource. A command resolves
+  // to the entry whose id matches it (heuristically, so "nautilus" finds
+  // org.gnome.Nautilus) or whose Exec runs the same program. Anything else
+  // gets the theme's terminal icon.
   readonly property string commandIcon: "utilities-terminal"
 
   function iconSource(icon) {
@@ -334,7 +338,7 @@ Item {
     return root.shell.appLibrary.iconSource(icon || root.commandIcon)
   }
 
-  // The program a typed command line runs, past env/launcher wrappers.
+  // The program a command line runs, past env/launcher wrappers.
   function programOf(commandLine) {
     var words = String(commandLine || "").split(" ")
     for (var i = 0; i < words.length; i++) {
@@ -345,12 +349,35 @@ Item {
     return ""
   }
 
-  function iconForProgram(name) {
-    if (!name) return ""
-    for (var i = 0; i < root.commands.length; i++) {
-      if (root.commands[i].name === name) return String(root.commands[i].icon || "")
+  function entryForId(id) {
+    if (!id) return null
+    try {
+      var entry = DesktopEntries.byId(id)
+      if (!entry) entry = DesktopEntries.heuristicLookup(id)
+      return entry || null
+    } catch (e) {
+      return null
     }
-    return ""
+  }
+
+  function entryForProgram(name) {
+    if (!name) return null
+    var direct = root.entryForId(name)
+    if (direct) return direct
+    var values = []
+    try { values = DesktopEntries.applications.values || [] } catch (e) { values = [] }
+    for (var i = 0; i < values.length; i++) {
+      var entry = values[i]
+      var command = entry.command || []
+      if (command.length > 0 && root.programOf(command.join(" ")) === name) return entry
+    }
+    return null
+  }
+
+  function iconForRow(row) {
+    var entry = row.kind === "desktop" ? root.entryForId(row.id) : root.entryForProgram(root.programOf(row.exec))
+    if (entry && entry.icon) return String(entry.icon)
+    return row.kind === "desktop" ? String(row.icon || "") : ""
   }
 
   function formatWhen(epoch) {

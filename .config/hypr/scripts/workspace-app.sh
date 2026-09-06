@@ -14,7 +14,6 @@
 #   rows <ws>       print the picker rows for a workspace as JSON
 #   forget <key>    drop an entry from the recent and previous lists
 #   commands        print every executable on PATH as JSON (picker search)
-#   icons           print the {program: icon} index built from desktop entries
 #   run <mon> <entry-json>   launch one entry on a monitor (used internally)
 #
 # State: ~/.local/state/hypr/workspace-apps.json
@@ -189,17 +188,11 @@ snapshot_running() {
 # --- picker rows ------------------------------------------------------------
 
 rows_for() { # <ws>
-  state_read | jq -c --arg ws "$1" --argjson icons "$(desktop_icon_index)" '
+  state_read | jq -c --arg ws "$1" '
     def key: if .kind == "desktop" then "desktop:" + .id else "command:" + .exec end;
-    # The program a command line runs, past env/launcher wrappers, for icons.
-    def program: (.exec // "") | split(" ")
-      | map(select(length > 0))
-      | (map(select(test("^(env|uwsm-app|setsid|--|[A-Za-z_][A-Za-z0-9_]*=.*)$") | not)) | first // "")
-      | split("/") | last;
     def row(section): . + {
       key: key,
       subtext: (if .kind == "desktop" then (.exec // .id) else .exec end),
-      icon: (if .kind == "desktop" then (.icon // "") else ($icons[program] // "") end),
       section: section
     };
     . as $s
@@ -213,49 +206,6 @@ rows_for() { # <ws>
   ' 2>/dev/null || echo "[]"
 }
 
-# --- icons for commands -----------------------------------------------------
-
-# {name: icon} from every desktop entry: the Exec/TryExec program basename and
-# the lowercased entry id all map to the entry's Icon, first dir wins.
-desktop_icon_index() {
-  local dir files=()
-  IFS=: read -ra dirs <<<"$APP_DIRS"
-  for dir in "${dirs[@]}"; do
-    [[ -d $dir ]] || continue
-    for f in "$dir"/*.desktop; do [[ -e $f ]] && files+=("$f"); done
-  done
-  (( ${#files[@]} )) || { echo '{}'; return; }
-  awk '
-    function basecmd(v,   parts, k, m, w) {
-      m = split(v, parts, " ")
-      for (k = 1; k <= m; k++) {
-        w = parts[k]
-        if (w == "env" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
-        sub(/.*\//, "", w); gsub(/"/, "", w)
-        return w
-      }
-      return ""
-    }
-    function flush() {
-      if (icon != "") {
-        if (ex != "") print ex "\t" icon
-        if (te != "") print te "\t" icon
-        print idl "\t" icon
-      }
-      ex = ""; te = ""; icon = ""; n = 0
-    }
-    FNR == 1 { flush(); f = FILENAME; sub(/.*\//, "", f); sub(/\.desktop$/, "", f); idl = tolower(f) }
-    /^\[/ { n++ }
-    n == 1 && /^Exec=/ { v = $0; sub(/^Exec=/, "", v); ex = basecmd(v) }
-    n == 1 && /^TryExec=/ { v = $0; sub(/^TryExec=/, "", v); te = basecmd(v) }
-    n == 1 && /^Icon=/ { icon = $0; sub(/^Icon=/, "", icon) }
-    END { flush() }
-  ' "${files[@]}" | jq -Rsc '
-    split("\n") | map(select(length > 0) | split("\t") | {key: .[0], value: .[1]})
-    | unique_by(.key) | from_entries
-  '
-}
-
 # --- PATH commands ----------------------------------------------------------
 
 # Every executable on PATH as [{name, dir}], first dir on PATH wins a name.
@@ -267,8 +217,8 @@ path_commands() {
   for dir in "${dirs[@]}"; do
     [[ -d $dir ]] || continue
     find -L "$dir" -maxdepth 1 -mindepth 1 -type f -executable -printf '%f\t%h\n' 2>/dev/null
-  done | jq -Rsc --argjson icons "$(desktop_icon_index)" '
-    split("\n") | map(select(length > 0) | split("\t") | {name: .[0], dir: .[1], icon: ($icons[.[0]] // "")})
+  done | jq -Rsc '
+    split("\n") | map(select(length > 0) | split("\t") | {name: .[0], dir: .[1]})
     | unique_by(.name) | sort_by(.name)
   '
 }
@@ -425,7 +375,6 @@ case "${1:-}" in
     ;;
   resolve) resolve_class "${2:-}" ;;
   commands) path_commands ;;
-  icons) desktop_icon_index ;;
   context) cursor_context ;;
   snapshot) snapshot_running ;;
   *)
