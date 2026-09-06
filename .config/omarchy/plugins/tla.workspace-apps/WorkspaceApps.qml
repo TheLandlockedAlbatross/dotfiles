@@ -60,7 +60,12 @@ Item {
   property int contentSpacing: Style.spacing.md
   property int cardWidth: Math.min(Style.space(875), panel.width - Style.gapsOut * 2)
   property int cardHeight: Math.min(Style.space(600), panel.height - Style.gapsOut * 2)
-  property int rowHeight: Math.max(Style.space(50), Style.font.body + Style.font.caption + Style.spacing.rowPaddingX * 2)
+  property color selectedBorder: Color.menu.selectedBorder
+  property var selectedBorderSpec: Border.surfaceSpec("menu", "selected-border", selectedBorder, 0)
+  readonly property real rowReservedBorderLeft: Border.left(selectedBorderSpec)
+  readonly property real rowReservedBorderRight: Border.right(selectedBorderSpec)
+  property int baseRowHeight: Math.max(Style.space(50), Style.font.body + Style.spacing.rowPaddingX * 2)
+  property int detailRowHeight: Math.max(Style.space(58), Style.font.body + Style.font.caption + Style.spacing.rowPaddingX * 2)
 
   function open(payloadJson) {
     var payload = ({})
@@ -511,10 +516,12 @@ Item {
                 anchors.rightMargin: root.contentMargin
                 model: displayModel
                 clip: true
-                spacing: Style.space(4)
+                spacing: 0
                 boundsBehavior: Flickable.StopAtBounds
 
-                delegate: Rectangle {
+                // Rows mirror the launcher's app rows under Super+Space: the
+                // same icon column, image size, label and detail fonts.
+                delegate: BorderSurface {
                   id: row
                   required property int index
                   required property string kind
@@ -526,86 +533,80 @@ Item {
                   required property string section
 
                   readonly property bool hasCursor: root.cursorActive && index === root.selectedIndex
+                  readonly property bool hasDetail: row.subtext.length > 0 && row.subtext !== row.label
 
                   width: ListView.view.width
-                  height: root.rowHeight
+                  height: row.hasDetail ? root.detailRowHeight : root.baseRowHeight
                   radius: root.cornerRadius
                   color: hasCursor ? root.selectedBackground : "transparent"
+                  borderSpec: row.hasCursor ? root.selectedBorderSpec : Border.none()
 
-                  Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: Style.space(12)
-                    anchors.rightMargin: Style.space(12)
-                    anchors.topMargin: Style.space(8)
-                    anchors.bottomMargin: Style.space(8)
-                    spacing: Style.space(10)
+                  Image {
+                    id: appIconImage
+                    width: Style.font.iconLarge
+                    height: Style.font.iconLarge
+                    fillMode: Image.PreserveAspectFit
+                    // Decode at physical pixels — a logical-size decode leaves
+                    // PNG icons upscaled and blurry on HiDPI displays.
+                    sourceSize.width: width * Screen.devicePixelRatio
+                    sourceSize.height: height * Screen.devicePixelRatio
+                    source: root.iconSource(row.icon)
+                    asynchronous: true
+                    anchors.left: parent.left
+                    anchors.leftMargin: root.rowReservedBorderLeft + Style.space(8) + (Style.space(36) - width) / 2
+                    y: contentColumn.y + labelText.y + (labelText.height - height) / 2
+                  }
 
-                    Item {
-                      width: parent.height
-                      height: parent.height
+                  Column {
+                    id: contentColumn
+                    anchors.left: parent.left
+                    anchors.leftMargin: root.rowReservedBorderLeft + Style.space(8) + Style.space(36) + Style.space(6)
+                    anchors.right: trail.left
+                    anchors.rightMargin: Style.space(6)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(3)
 
-                      Image {
-                        id: appIcon
-                        anchors.centerIn: parent
-                        width: Style.font.iconLarge
-                        height: Style.font.iconLarge
-                        fillMode: Image.PreserveAspectFit
-                        sourceSize.width: width * Screen.devicePixelRatio
-                        sourceSize.height: height * Screen.devicePixelRatio
-                        source: root.iconSource(row.icon)
-                        asynchronous: true
-                        visible: status === Image.Ready
-                      }
-
-                      Text {
-                        anchors.centerIn: parent
-                        visible: !appIcon.visible
-                        text: row.synthetic ? "" : (row.section === "path" ? "" : (row.kind === "command" ? "" : "󰘔"))
-                        color: row.hasCursor ? root.selectedText : root.foreground
-                        opacity: 0.72
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.iconLarge
-                      }
-                    }
-
-                    Column {
-                      width: parent.width - parent.height - parent.spacing - (row.isCurrent ? markText.width + parent.spacing : 0)
-                      anchors.verticalCenter: parent.verticalCenter
-                      spacing: Style.space(2)
-
-                      Text {
-                        textFormat: Text.PlainText
-                        width: parent.width
-                        text: row.label
-                        color: row.hasCursor ? root.selectedText : root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.title
-                        elide: Text.ElideRight
-                        wrapMode: Text.NoWrap
-                      }
-
-                      Text {
-                        textFormat: Text.PlainText
-                        width: parent.width
-                        visible: row.subtext.length > 0 && row.subtext !== row.label
-                        text: row.subtext
-                        color: row.hasCursor ? root.selectedText : root.foreground
-                        opacity: 0.6
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        elide: Text.ElideRight
-                        wrapMode: Text.NoWrap
-                      }
+                    Text {
+                      id: labelText
+                      textFormat: Text.PlainText
+                      width: parent.width
+                      text: row.label
+                      color: row.hasCursor ? root.selectedText : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.heading
+                      font.weight: Font.Medium
+                      elide: Text.ElideRight
                     }
 
                     Text {
-                      id: markText
-                      visible: row.isCurrent
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: "✓"
-                      color: row.hasCursor ? root.selectedText : root.foreground
+                      textFormat: Text.PlainText
+                      width: parent.width
+                      text: row.subtext
+                      visible: row.hasDetail
+                      color: root.foreground
+                      opacity: 0.52
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.title
+                      font.pixelSize: Style.font.bodySmall
+                      elide: Text.ElideRight
+                    }
+                  }
+
+                  Row {
+                    id: trail
+                    width: Style.space(14)
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.rowReservedBorderRight + Style.space(8)
+                    y: contentColumn.y + labelText.y + (labelText.height - height) / 2
+                    spacing: 0
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: row.isCurrent ? "✓" : ""
+                      color: row.hasCursor ? root.selectedText : root.foreground
+                      opacity: row.isCurrent ? 0.8 : 0
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.heading
+                      anchors.verticalCenter: parent.verticalCenter
                     }
                   }
 
