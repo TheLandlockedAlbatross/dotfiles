@@ -18,6 +18,9 @@
           "verticalFormat": "HH\n—\nmm"
         },
         {
+          "id": "omarchy.weather"
+        },
+        {
           "id": "omarchy.indicators",
           "items": [
             "NightLight",
@@ -27,9 +30,6 @@
         },
         {
           "id": "omarchy.keyboard-layout"
-        },
-        {
-          "id": "omarchy.weather"
         },
         {
           "id": "omarchy.system-update"
