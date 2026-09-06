@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "tla.workspace-apps",
+  "name": "Workspace apps",
+  "version": "1.0.0",
+  "author": "tla",
+  "description": "Picker for the per-workspace default program behind Super+Middle-click, styled like the clipboard manager. Driven by ~/.config/hypr/scripts/workspace-app.sh",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "WorkspaceApps.qml"
+  }
+}

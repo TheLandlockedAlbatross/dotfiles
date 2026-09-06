@@ -86,6 +86,9 @@
   "plugins": [
     {
       "id": "tla.lock"
+    },
+    {
+      "id": "tla.workspace-apps"
     }
   ],
   "version": 1,
