@@ -194,6 +194,7 @@ check "test runs a command through hyprland exec" "$(grep -c "dispatch exec fire
 check "test leaves the default alone" "$(state '.defaults["12"].id')" "foot"
 check "test records the command in recent" "$(state '.recent[0] | [.kind,.exec] | join(":")')" "command:firefox -P TLA"
 check "rows: command rows use the exec as subtext" "$("$WA" rows 12 | jq -r '.[] | select(.kind=="command") | .key + "|" + .subtext')" "command:firefox -P TLA|firefox -P TLA"
+check "rows: command rows borrow the program's desktop icon" "$("$WA" rows 12 | jq -r '.[] | select(.kind=="command") | .icon')" "firefox"
 
 # --- cancel and forget --------------------------------------------------------
 : > "$LOG"; rm -f "$TMP/answer"
@@ -221,10 +222,15 @@ chmod +x "$TMP/path1/zoom" "$TMP/path2/zoom" "$TMP/path2/alpha"
 export WORKSPACE_APP_PATH="$TMP/path1:$TMP/path2:$TMP/missing-dir"
 check "commands lists executables sorted by name" "$("$WA" commands | jq -r 'map(.name) | join(",")')" "alpha,zoom"
 check "commands: first PATH dir wins a name" "$("$WA" commands | jq -r '.[] | select(.name=="zoom") | .dir')" "$TMP/path1"
+printf '#!/bin/sh\n' > "$TMP/path2/nautilus"; printf '#!/bin/sh\n' > "$TMP/path2/code-oss"; chmod +x "$TMP/path2/nautilus" "$TMP/path2/code-oss"
+check "commands carry the icon of the desktop entry that runs them" "$("$WA" commands | jq -r '.[] | select(.name=="nautilus") | .icon')" "org.gnome.Nautilus"
+check "commands match desktop ids too" "$("$WA" commands | jq -r '.[] | select(.name=="code-oss") | .icon')" "vscodium"
+check "commands without a desktop entry have no icon" "$("$WA" commands | jq -r '.[] | select(.name=="alpha") | .icon')" ""
+check "icon index skips env wrappers and paths" "$("$WA" icons | jq -r '.firefox')" "firefox"
 : > "$LOG"; rm -f "$TMP/answer"; CURSOR='{"x":100,"y":100}'
 "$WA" set
 check "picker payload points at the PATH index file" "$(jq -r '.commandsFile' "$TMP/payload.json")" "$TMP/state-commands.json"
-check "PATH index file is written for the overlay" "$(jq -r 'map(.name) | join(",")' "$TMP/state-commands.json")" "alpha,zoom"
+check "PATH index file is written for the overlay" "$(jq -r 'map(.name) | join(",")' "$TMP/state-commands.json")" "alpha,code-oss,nautilus,zoom"
 unset WORKSPACE_APP_PATH
 
 # --- rows cap ----------------------------------------------------------------

@@ -169,7 +169,7 @@ Item {
         label: "Run “" + raw + "”",
         subtext: raw,
         exec: raw,
-        icon: "",
+        icon: root.iconForProgram(root.programOf(raw)),
         file: "",
         section: "custom",
         lastUsed: 0,
@@ -204,7 +204,7 @@ Item {
           label: name,
           subtext: String(found[j].dir || "") + "/" + name,
           exec: name,
-          icon: "",
+          icon: String(found[j].icon || ""),
           file: "",
           section: "path",
           lastUsed: 0,
@@ -321,9 +321,31 @@ Item {
     root.rebuildDisplay()
   }
 
+  // Commands without a desktop entry of their own get the theme's terminal icon.
+  readonly property string commandIcon: "utilities-terminal"
+
   function iconSource(icon) {
-    if (!icon || !root.shell || !root.shell.appLibrary) return ""
-    return root.shell.appLibrary.iconSource(icon)
+    if (!root.shell || !root.shell.appLibrary) return ""
+    return root.shell.appLibrary.iconSource(icon || root.commandIcon)
+  }
+
+  // The program a typed command line runs, past env/launcher wrappers.
+  function programOf(commandLine) {
+    var words = String(commandLine || "").split(" ")
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i]
+      if (!w || w === "env" || w === "uwsm-app" || w === "setsid" || w === "--" || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue
+      return w.slice(w.lastIndexOf("/") + 1)
+    }
+    return ""
+  }
+
+  function iconForProgram(name) {
+    if (!name) return ""
+    for (var i = 0; i < root.commands.length; i++) {
+      if (root.commands[i].name === name) return String(root.commands[i].icon || "")
+    }
+    return ""
   }
 
   function formatWhen(epoch) {
