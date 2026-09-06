@@ -51,8 +51,12 @@ yt-dlp-OPUS() {
     local src="${dl_files[1]}"
     local codec
     codec=$(ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$src")
-    if [[ "$codec" == "opus" ]]; then
-        ffmpeg -loglevel error "${trim[@]}" -i "$src" -map_metadata 0 -c:a copy "${name}.opus"
+    # Stream copy only for whole-file opus: copy-trimming keeps source cluster
+    # timestamps and can write negative ogg granules that break players (mpv:
+    # "Unsupported huge granule pos"). Trims re-encode: sample-exact cuts,
+    # clean timestamps, libopus 192k is transparent.
+    if [[ "$codec" == "opus" && ${#trim[@]} -eq 0 ]]; then
+        ffmpeg -loglevel error -i "$src" -map_metadata 0 -c:a copy "${name}.opus"
     else
         ffmpeg -loglevel error "${trim[@]}" -i "$src" -map_metadata 0 -c:a libopus -b:a 192k "${name}.opus"
     fi && rm -- "$src" && echo "→ ${name}.opus (source codec: ${codec})"
