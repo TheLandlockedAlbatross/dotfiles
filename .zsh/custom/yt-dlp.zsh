@@ -1,3 +1,26 @@
+# Audio only, best quality, Opus (native stream preferred so opus->opus is a
+# copy, not a re-encode). Optional start/end accept any yt-dlp time syntax
+# (90, 1:30, 00:01:30.5); omit both for the whole track, omit end to run to
+# the end of the video.
+#   yt-dlp-OPUS <url> [start] [end]
+yt-dlp-OPUS() {
+    local url="$1" start="$2" end="$3"
+    if [[ -z "$url" ]]; then
+        echo "Usage: yt-dlp-OPUS <url> [start] [end]"
+        return 1
+    fi
+    local -a section
+    if [[ -n "$start" || -n "$end" ]]; then
+        section=(--download-sections "*${start:-0}-${end:-inf}" --force-keyframes-at-cuts)
+    fi
+    yt-dlp -f "bestaudio[acodec^=opus]/bestaudio" \
+        -x --audio-format opus --audio-quality 0 \
+        --embed-metadata \
+        "${section[@]}" \
+        -o "%(title)s [%(id)s].%(ext)s" \
+        "$url"
+}
+
 yt-dlp-FULL_ARCHIVE() {
     local url="$1"
     # Extract video title safely
