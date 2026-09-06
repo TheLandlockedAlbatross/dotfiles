@@ -126,6 +126,9 @@ for config_file ($ZSH_CUSTOM/*.zsh(N)); do
     source "$config_file"
 done
 
+# Machine-local overrides, never committed (.zsh/ allowlist covers only custom/)
+[[ -f "${ZSH}/local.zsh" ]] && source "${ZSH}/local.zsh"
+
 # X11-only scripts and env vars (skipped on Wayland/headless sessions)
 if [[ -z "${WAYLAND_DISPLAY}" && "${XDG_SESSION_TYPE}" != "wayland" && -n "${DISPLAY}" ]]; then
     for config_file ($ZSH_CUSTOM/x11/*.zsh(N)); do

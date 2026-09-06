@@ -9,14 +9,17 @@ yt-dlp-OPUS() {
         echo "Usage: yt-dlp-OPUS <url> [start] [end]"
         return 1
     fi
-    local -a section
+    local -a section cookies
     if [[ -n "$start" || -n "$end" ]]; then
         section=(--download-sections "*${start:-0}-${end:-inf}" --force-keyframes-at-cuts)
     fi
+    # Age-gated videos: set YTDLP_COOKIE_PROFILE (e.g. "firefox:default-release")
+    # in machine-local config (~/.zsh/local.zsh); unset = no cookies, portable.
+    [[ -n "${YTDLP_COOKIE_PROFILE}" ]] && cookies=(--cookies-from-browser "${YTDLP_COOKIE_PROFILE}")
     yt-dlp -f "bestaudio[acodec^=opus]/bestaudio" \
         -x --audio-format opus --audio-quality 0 \
         --embed-metadata \
-        "${section[@]}" \
+        "${section[@]}" "${cookies[@]}" \
         -o "%(title)s [%(id)s].%(ext)s" \
         "$url"
 }
