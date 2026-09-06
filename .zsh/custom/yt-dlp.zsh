@@ -28,12 +28,28 @@ yt-dlp-OPUS() {
             name+="_${${start:-0}//:/.}-${${end:-end}//:/.}"
         fi
     fi
-    yt-dlp -f "bestaudio[acodec^=opus]/bestaudio" \
-        -x --audio-format opus --audio-quality 0 \
+    # Two stages: download the canonical best audio stream untouched (whatever
+    # codec yt-dlp ranks highest), then make the .opus ourselves with ffmpeg —
+    # stream-copied when the source is already Opus, else libopus 192k.
+    yt-dlp -f bestaudio \
         --embed-metadata \
         "${section[@]}" "${cookies[@]}" \
-        -o "${name}.%(ext)s" \
-        "$url"
+        -o "${name}.dl.%(ext)s" \
+        "$url" || return 1
+
+    local -a dl_files=( "${name}".dl.*(N) )
+    if (( ${#dl_files} == 0 )); then
+        echo "yt-dlp-OPUS: download produced no file"
+        return 1
+    fi
+    local src="${dl_files[1]}"
+    local codec
+    codec=$(ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$src")
+    if [[ "$codec" == "opus" ]]; then
+        ffmpeg -loglevel error -i "$src" -map_metadata 0 -c:a copy "${name}.opus"
+    else
+        ffmpeg -loglevel error -i "$src" -map_metadata 0 -c:a libopus -b:a 192k "${name}.opus"
+    fi && rm -- "$src" && echo "→ ${name}.opus (source codec: ${codec})"
 }
 
 yt-dlp-FULL_ARCHIVE() {
