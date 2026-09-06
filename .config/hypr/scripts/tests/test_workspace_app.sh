@@ -213,6 +213,20 @@ echo '{"action":"set","row":{"kind":"command","exec":"foot -e btop","label":"foo
 check "other workspace keeps its own default" "$(state '.defaults | keys | join(",")')" "12,21"
 check "command default launches via exec" "$(grep -c "dispatch exec foot -e btop" "$LOG")" "1"
 
+# --- PATH command index -------------------------------------------------------
+mkdir -p "$TMP/path1" "$TMP/path2"
+printf '#!/bin/sh\n' > "$TMP/path1/zoom"; printf '#!/bin/sh\n' > "$TMP/path2/zoom"; printf '#!/bin/sh\n' > "$TMP/path2/alpha"
+echo "not executable" > "$TMP/path1/README"
+chmod +x "$TMP/path1/zoom" "$TMP/path2/zoom" "$TMP/path2/alpha"
+export WORKSPACE_APP_PATH="$TMP/path1:$TMP/path2:$TMP/missing-dir"
+check "commands lists executables sorted by name" "$("$WA" commands | jq -r 'map(.name) | join(",")')" "alpha,zoom"
+check "commands: first PATH dir wins a name" "$("$WA" commands | jq -r '.[] | select(.name=="zoom") | .dir')" "$TMP/path1"
+: > "$LOG"; rm -f "$TMP/answer"; CURSOR='{"x":100,"y":100}'
+"$WA" set
+check "picker payload points at the PATH index file" "$(jq -r '.commandsFile' "$TMP/payload.json")" "$TMP/state-commands.json"
+check "PATH index file is written for the overlay" "$(jq -r 'map(.name) | join(",")' "$TMP/state-commands.json")" "alpha,zoom"
+unset WORKSPACE_APP_PATH
+
 # --- rows cap ----------------------------------------------------------------
 reset
 for i in $(seq 1 60); do

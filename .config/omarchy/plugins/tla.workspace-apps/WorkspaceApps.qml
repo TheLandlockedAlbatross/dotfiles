@@ -10,7 +10,7 @@ import qs.Ui
 // search header, list on the left and detail pane on the right.
 //
 // Summoned by ~/.config/hypr/scripts/workspace-app.sh with a payload of
-// {workspace, monitor, rows, currentKey, selectionFile, doneFile}. The
+// {workspace, monitor, rows, commandsFile, currentKey, selectionFile, doneFile}. The
 // answer {action: "set"|"test", row} goes to selectionFile and doneFile is
 // touched, exactly like omarchy.menu's select mode; closing without a choice
 // touches doneFile alone.
@@ -18,7 +18,8 @@ import qs.Ui
 //   Enter        set as the workspace default and launch
 //   Shift+Enter  test: launch without setting
 //   Delete       forget the row (never the current default)
-//   typing       filters; text that matches no row can be run as a command
+//   typing       fuzzy-filters; the typed text leads as a "Run" row and
+//                executables on PATH join the matches below the history
 Item {
   id: root
 
@@ -33,6 +34,9 @@ Item {
   property int selectedIndex: 0
   property bool cursorActive: false
   property var rows: []
+  property var commands: []
+  property string commandsFile: ""
+  property int commandLimit: 40
   property int workspace: 0
   property string monitor: ""
   property string currentKey: ""
@@ -63,6 +67,9 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
 
     root.rows = Array.isArray(payload.rows) ? payload.rows : []
+    root.commands = []
+    root.commandsFile = String(payload.commandsFile || "")
+    if (root.commandsFile) commandsView.reload()
     root.workspace = Number(payload.workspace || 0)
     root.monitor = String(payload.monitor || "")
     root.currentKey = String(payload.currentKey || "")
@@ -111,28 +118,50 @@ Item {
     resultProc.running = true
   }
 
-  function rowMatches(row, needle) {
-    if (!needle) return true
-    var hay = (String(row.label || "") + " " + String(row.subtext || "") + " " + String(row.id || "")).toLowerCase()
-    return hay.indexOf(needle) !== -1
+  // 0 = prefix, 1 = substring, 2 = subsequence, -1 = no match.
+  function fuzzyScore(text, needle) {
+    if (!needle) return 0
+    var hay = String(text || "").toLowerCase()
+    if (hay.indexOf(needle) === 0) return 0
+    if (hay.indexOf(needle) !== -1) return 1
+    var at = 0
+    for (var i = 0; i < needle.length; i++) {
+      at = hay.indexOf(needle.charAt(i), at)
+      if (at === -1) return -1
+      at += 1
+    }
+    return 2
+  }
+
+  function rowScore(row, needle) {
+    if (!needle) return 0
+    var best = -1
+    var fields = [row.label, row.subtext, row.id]
+    for (var i = 0; i < fields.length; i++) {
+      var score = root.fuzzyScore(fields[i], needle)
+      if (score !== -1 && (best === -1 || score < best)) best = score
+    }
+    return best
+  }
+
+  function rankedMatches(list, needle, scoreOf) {
+    var hits = []
+    for (var i = 0; i < list.length; i++) {
+      var score = scoreOf(list[i], needle)
+      if (score !== -1) hits.push({ item: list[i], score: score, order: i })
+    }
+    hits.sort(function(a, b) { return a.score - b.score || a.order - b.order })
+    return hits.map(function(h) { return h.item })
   }
 
   function rebuildDisplay() {
-    var needle = root.filterText.trim().toLowerCase()
     var raw = root.filterText.trim()
+    var needle = raw.toLowerCase()
 
     displayModel.clear()
-    var exactCommand = false
-    for (var i = 0; i < root.rows.length; i++) {
-      var row = root.rows[i]
-      if (!root.rowMatches(row, needle)) continue
-      if (row.kind === "command" && String(row.exec || "") === raw) exactCommand = true
-      displayModel.append(root.displayRow(row, false))
-    }
 
-    // Whatever was typed can always be run as a command, unless a row already
-    // is that exact command.
-    if (raw.length > 0 && !exactCommand) {
+    // Whatever was typed leads, ready to run as a command.
+    if (raw.length > 0) {
       displayModel.append(root.displayRow({
         key: "command:" + raw,
         kind: "command",
@@ -147,6 +176,43 @@ Item {
         uses: 0,
         defaultFor: []
       }, true))
+    }
+
+    // The workspace's own history: everything at rest, fuzzy-ranked once typing.
+    var history = root.rankedMatches(root.rows, needle, root.rowScore)
+    var seen = ({})
+    for (var i = 0; i < history.length; i++) {
+      var row = history[i]
+      if (row.kind === "command" && String(row.exec || "") === raw) continue
+      seen[String(row.exec || "")] = true
+      displayModel.append(root.displayRow(row, false))
+    }
+
+    // Executables on PATH only join once something is typed.
+    if (raw.length > 0) {
+      var found = root.rankedMatches(root.commands, needle, function(cmd, n) {
+        return root.fuzzyScore(cmd.name, n)
+      })
+      var added = 0
+      for (var j = 0; j < found.length && added < root.commandLimit; j++) {
+        var name = String(found[j].name || "")
+        if (name === raw || seen[name]) continue
+        displayModel.append(root.displayRow({
+          key: "command:" + name,
+          kind: "command",
+          id: "",
+          label: name,
+          subtext: String(found[j].dir || "") + "/" + name,
+          exec: name,
+          icon: "",
+          file: "",
+          section: "path",
+          lastUsed: 0,
+          uses: 0,
+          defaultFor: []
+        }, false))
+        added += 1
+      }
     }
 
     if (displayModel.count === 0) selectedIndex = 0
@@ -234,7 +300,7 @@ Item {
   function forgetIndex(index) {
     if (index < 0 || index >= displayModel.count) return
     var row = displayModel.get(index)
-    if (row.synthetic || row.isCurrent) return
+    if (row.synthetic || row.isCurrent || row.section === "path") return
 
     Util.execArgv([root.scriptPath, "forget", row.key])
 
@@ -269,6 +335,7 @@ Item {
     if (row.synthetic) return "Typed command"
     if (row.isCurrent) return "Current default for workspace " + root.workspace
     if (row.section === "previous") return "Earlier default for workspace " + root.workspace
+    if (row.section === "path") return "Executable on PATH"
     return "Recently launched"
   }
 
@@ -281,6 +348,19 @@ Item {
 
   Process {
     id: resultProc
+  }
+
+  // The PATH index the script writes before summoning: too big for the
+  // summon argv, so it arrives by file.
+  FileView {
+    id: commandsView
+    path: root.commandsFile
+    printErrors: false
+    onLoaded: {
+      try { root.commands = JSON.parse(text()) } catch (e) { root.commands = [] }
+      if (root.opened && root.filterText) root.rebuildDisplay()
+    }
+    onLoadFailed: root.commands = []
   }
 
   PanelWindow {
@@ -421,6 +501,7 @@ Item {
                   required property string icon
                   required property bool isCurrent
                   required property bool synthetic
+                  required property string section
 
                   readonly property bool hasCursor: root.cursorActive && index === root.selectedIndex
 
@@ -457,7 +538,7 @@ Item {
                       Text {
                         anchors.centerIn: parent
                         visible: !appIcon.visible
-                        text: row.synthetic ? "" : (row.kind === "command" ? "" : "󰘔")
+                        text: row.synthetic ? "" : (row.section === "path" ? "" : (row.kind === "command" ? "" : "󰘔"))
                         color: row.hasCursor ? root.selectedText : root.foreground
                         opacity: 0.72
                         font.family: root.fontFamily
@@ -574,8 +655,8 @@ Item {
                   model: detail.row ? [
                     { k: "Command", v: detail.row.exec },
                     { k: "Desktop entry", v: detail.row.kind === "desktop" ? detail.row.file : "" },
-                    { k: "Last launched", v: detail.row.synthetic ? "" : root.formatWhen(detail.row.lastUsed) },
-                    { k: "Launched via picker", v: detail.row.synthetic ? "" : String(detail.row.uses) + (detail.row.uses === 1 ? " time" : " times") },
+                    { k: "Last launched", v: detail.row.synthetic || detail.row.section === "path" ? "" : root.formatWhen(detail.row.lastUsed) },
+                    { k: "Launched via picker", v: detail.row.synthetic || detail.row.section === "path" ? "" : String(detail.row.uses) + (detail.row.uses === 1 ? " time" : " times") },
                     { k: "Default on workspaces", v: detail.row.defaultFor }
                   ] : []
 

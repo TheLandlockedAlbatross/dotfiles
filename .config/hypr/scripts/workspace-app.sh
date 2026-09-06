@@ -13,6 +13,7 @@
 #   set             click handler: always open the picker
 #   rows <ws>       print the picker rows for a workspace as JSON
 #   forget <key>    drop an entry from the recent and previous lists
+#   commands        print every executable on PATH as JSON (picker search)
 #   run <mon> <entry-json>   launch one entry on a monitor (used internally)
 #
 # State: ~/.local/state/hypr/workspace-apps.json
@@ -25,11 +26,13 @@
 # start time, so anything that was ever open while picking shows up.
 #
 # Overridable for tests: WORKSPACE_APP_STATE, WORKSPACE_APP_DIRS (colon list
-# of applications dirs), WORKSPACE_APP_PROC (fake /proc root).
+# of applications dirs), WORKSPACE_APP_PROC (fake /proc root),
+# WORKSPACE_APP_PATH (PATH to index).
 
 set -u
 
 STATE_FILE="${WORKSPACE_APP_STATE:-$HOME/.local/state/hypr/workspace-apps.json}"
+COMMANDS_FILE="${STATE_FILE%.json}-commands.json"
 APP_DIRS="${WORKSPACE_APP_DIRS:-$HOME/.local/share/applications:/usr/share/applications}"
 PROC_ROOT="${WORKSPACE_APP_PROC:-/proc}"
 PLUGIN_ID="tla.workspace-apps"
@@ -203,6 +206,23 @@ rows_for() { # <ws>
   ' 2>/dev/null || echo "[]"
 }
 
+# --- PATH commands ----------------------------------------------------------
+
+# Every executable on PATH as [{name, dir}], first dir on PATH wins a name.
+# Joins the picker only once something is typed, so the resting list stays
+# the workspace's own history.
+path_commands() {
+  local dir
+  IFS=: read -ra dirs <<<"${WORKSPACE_APP_PATH:-$PATH}"
+  for dir in "${dirs[@]}"; do
+    [[ -d $dir ]] || continue
+    find -L "$dir" -maxdepth 1 -mindepth 1 -type f -executable -printf '%f\t%h\n' 2>/dev/null
+  done | jq -Rsc '
+    split("\n") | map(select(length > 0) | split("\t") | {name: .[0], dir: .[1]})
+    | unique_by(.name) | sort_by(.name)
+  '
+}
+
 # --- pointer context --------------------------------------------------------
 
 # Where the click landed: {monitor, workspace, onDesktop}. onDesktop is false
@@ -275,14 +295,18 @@ pick() { # <ws> <monitor>
   current_key=$(state_read | jq -r --arg ws "$ws" '
     .defaults[$ws] | if . == null then "" elif .kind == "desktop" then "desktop:" + .id else "command:" + .exec end')
 
+  mkdir -p "$(dirname "$STATE_FILE")"
   selection_file=$(mktemp)
   done_file=$(mktemp)
   rm -f "$done_file"
   trap "rm -f '$selection_file' '$done_file'" EXIT
 
+  # The PATH index is far too big for an argv, so it goes through a file the
+  # overlay reads on open.
+  path_commands >"$COMMANDS_FILE"
   payload=$(jq -nc --arg ws "$ws" --arg mon "$mon" --argjson rows "$rows" --arg key "$current_key" \
-    --arg sel "$selection_file" --arg done "$done_file" \
-    '{workspace: ($ws | tonumber), monitor: $mon, rows: $rows, currentKey: $key, selectionFile: $sel, doneFile: $done}')
+    --arg commands "$COMMANDS_FILE" --arg sel "$selection_file" --arg done "$done_file" \
+    '{workspace: ($ws | tonumber), monitor: $mon, rows: $rows, commandsFile: $commands, currentKey: $key, selectionFile: $sel, doneFile: $done}')
 
   if [[ $(omarchy-shell shell summon "$PLUGIN_ID" "$payload" 2>/dev/null) != "ok" ]]; then
     notify-send -a workspace-app -u critical "Workspace app" "Picker plugin $PLUGIN_ID is not enabled"
@@ -350,6 +374,7 @@ case "${1:-}" in
     run_entry "$2" "$3"
     ;;
   resolve) resolve_class "${2:-}" ;;
+  commands) path_commands ;;
   context) cursor_context ;;
   snapshot) snapshot_running ;;
   *)
