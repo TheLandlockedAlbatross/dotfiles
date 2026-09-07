@@ -455,14 +455,17 @@ Item {
     }
   }
 
+  // DPMS, not brightness: omarchy-brightness-display only dims the FOCUSED
+  // monitor (DDC brightness 0) — on a four-external-monitor desktop the other
+  // three stay lit and nothing truly powers off. dpms hits every display.
   Process {
     id: wakeProcess
-    command: ["bash", "-c", "omarchy-system-wake"]
+    command: ["bash", "-c", "hyprctl dispatch dpms on; omarchy-system-wake"]
   }
 
   Process {
     id: blankProcess
-    command: ["bash", "-c", "omarchy-brightness-keyboard off; omarchy-brightness-display off"]
+    command: ["bash", "-c", "omarchy-brightness-keyboard off; hyprctl dispatch dpms off"]
   }
 
   Timer {
