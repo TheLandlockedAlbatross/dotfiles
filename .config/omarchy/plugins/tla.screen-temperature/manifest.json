@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "tla.screen-temperature",
+  "name": "Screen temperature",
+  "version": "1.0.0",
+  "author": "tla",
+  "description": "hyprsunset screen temperature readout with warm/cool tint; scroll to fine-adjust, click to step, middle-click toggles the display off",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Widget.qml" },
+  "barWidget": {
+    "displayName": "Screen temperature",
+    "description": "Screen color temperature (hyprsunset), driven by ~/.config/waybar/cycle-temperature.sh",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
