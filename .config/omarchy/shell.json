@@ -23,7 +23,6 @@
         {
           "id": "omarchy.indicators",
           "items": [
-            "NightLight",
             "Dnd",
             "StayAwake"
           ]
@@ -94,7 +93,8 @@
   "version": 1,
   "disabledPlugins": [
     "omarchy.idle",
-    "omarchy.lock"
+    "omarchy.lock",
+    "omarchy.nightlight"
   ],
   "cloneSourceRestores": [
     "tla.lock"
