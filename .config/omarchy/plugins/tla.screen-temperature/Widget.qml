@@ -71,7 +71,7 @@ BarWidget {
     bar: root.bar
     text: root.icon + " " + root.temp + "K"
     foreground: root.tint(root.temp)
-    fontSize: Style.font.caption
+    fontSize: Style.bar.iconFont
     tooltipText: "Screen temperature: " + root.temp + "K\nscroll ±10  ·  click ∓500  ·  middle: display off"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.RightButton) root.cycle(500)
