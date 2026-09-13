@@ -139,7 +139,7 @@
     "exec": "~/.config/waybar/network-vpn.sh",
     "return-type": "json",
     "interval": 1,
-    "on-click": "omarchy-launch-wifi",
+    "on-click": "omarchy-shell shell toggle omarchy.network",
     "on-click-middle": "~/.config/waybar/network-vpn-incognito.sh",
     "on-click-right": "~/.config/waybar/network-vpn-action.sh toggle",
     "on-scroll-up": "~/.config/waybar/network-vpn-action.sh next",
@@ -158,7 +158,7 @@
     "format-connected": "󰂱",
     "format-no-controller": "",
     "tooltip-format": "Devices connected: {num_connections}",
-    "on-click": "omarchy-launch-bluetooth"
+    "on-click": "omarchy-shell shell toggle omarchy.bluetooth"
   },
   "pulseaudio": {
     "format": "{icon}",

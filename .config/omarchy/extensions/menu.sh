@@ -167,8 +167,8 @@ show_setup_menu() {
 
   case $(menu "Setup" "$options") in
   *Audio*) omarchy-launch-audio ;;
-  *Wifi*) omarchy-launch-wifi ;;
-  *Bluetooth*) omarchy-launch-bluetooth ;;
+  *Wifi*) omarchy-shell shell toggle omarchy.network ;;
+  *Bluetooth*) omarchy-shell shell toggle omarchy.bluetooth ;;
   *Power*) show_setup_power_menu ;;
   *System*) show_setup_system_menu ;;
   *Monitors*) show_monitors_menu ;;

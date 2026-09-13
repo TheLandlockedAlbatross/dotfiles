@@ -51,6 +51,9 @@
 !.config/wireplumber/wireplumber.conf.d/
 !.config/wireplumber/wireplumber.conf.d/bluetooth-a2dp-autoconnect.conf
 !.config/wireplumber/wireplumber.conf.d/bluetooth-no-hfp-autoswitch.conf
+!.config/pipewire/
+!.config/pipewire/pipewire.conf.d/
+!.config/pipewire/pipewire.conf.d/resolve-bridge.conf
 !.config/waybar/
 !.config/waybar/config.jsonc
 !.config/waybar/style.css
@@ -115,6 +118,10 @@
 !.config/tmux/tmux.conf
 !.config/herdr/
 !.config/herdr/config.toml
+!.config/herdr/plugins/
+!.config/herdr/plugins/tla.recent/
+!.config/herdr/plugins/tla.recent/herdr-plugin.toml
+!.config/herdr/plugins/tla.recent/recent.py
 !.config/systemd/
 !.config/systemd/user/
 !.config/systemd/user/bgutil-pot.service
@@ -161,12 +168,12 @@
 !.local/bin/bw-backup-watcher
 !.local/bin/bw-vault-decrypt
 !.local/bin/seal
+!.local/bin/dafont
 !.local/bin/unseal
+!.local/bin/shokz
 # omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts
 !.local/bin/walker
 !.local/bin/omarchy-launch-audio
-!.local/bin/omarchy-launch-bluetooth
 !.local/bin/omarchy-launch-walker
-!.local/bin/omarchy-launch-wifi
 !.local/bin/omarchy-swayosd-client
 !.local/bin/omarchy-tz-select
