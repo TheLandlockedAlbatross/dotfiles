@@ -66,6 +66,30 @@ Item {
     passwordInput.forceActiveFocus()
   }
 
+  // The session-lock surface's compositor keyboard focus settles a beat after
+  // the surface maps, so a single forceActiveFocus can land before the window
+  // is active and be dropped — leaving the field needing a click. Re-assert a
+  // few times after enable so typing works immediately on whichever monitor
+  // the field lands on. Every surface's TextInput is focused, so keys are
+  // captured wherever the compositor puts focus and mirror to the shown field.
+  Timer {
+    id: focusRetryTimer
+    interval: 120
+    repeat: true
+    property int tries: 0
+    onTriggered: {
+      root.forcePasswordFocus()
+      if (++tries >= 8) { stop(); tries = 0 }
+    }
+  }
+  function kickFocus() {
+    if (!inputEnabled) return
+    forcePasswordFocus()
+    focusRetryTimer.tries = 0
+    focusRetryTimer.restart()
+  }
+  onShowFieldChanged: if (showField) kickFocus()
+
   function clearPassword() {
     passwordTextEdited("")
   }
@@ -79,11 +103,11 @@ Item {
 
   onPasswordTextChanged: syncPasswordText()
   onInputEnabledChanged: {
-    if (inputEnabled) Qt.callLater(forcePasswordFocus)
+    if (inputEnabled) kickFocus()
   }
   Component.onCompleted: {
     syncPasswordText()
-    if (inputEnabled) Qt.callLater(forcePasswordFocus)
+    if (inputEnabled) kickFocus()
   }
 
   // Measures the masked password at full size; passwordDotScale compares this
