@@ -71,9 +71,7 @@ BarWidget {
     bar: root.bar
     text: root.icon + " " + root.temp + "K"
     foreground: root.tint(root.temp)
-    // Digits read smaller than the nerd-font icon glyphs at equal px, so scale
-    // up past iconFont to match the neighbouring icon widgets' visual weight.
-    fontSize: Math.round(Style.bar.iconFont * 1.3)
+    fontSize: Style.bar.iconFont
     tooltipText: "Screen temperature: " + root.temp + "K\nscroll ±10  ·  click ∓500  ·  middle: display off"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.RightButton) root.cycle(500)
