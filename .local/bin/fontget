@@ -1,0 +1,839 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx>=0.27", "selectolax>=0.3", "fonttools>=4.50", "typer>=0.12", "rich>=13"]
+# ///
+"""fontget — sudo-less font fetcher for Omarchy: preview and install fonts from font sites as CUSTOM-….
+
+  fontget info [FONT] [-s SITE] [--siblings N]   what the site knows about it (+ category neighbours)
+  fontget preview [FONT] [-s SITE] [--text T]    temp download + browser page: type text, see every style, Install button
+  fontget install [FONT] [-s SITE] [-i] [-n]     download to tmp, CUSTOM- prefix, install to ~/.local/share/fonts/custom
+  fontget search QUERY [-s SITE]                 search every enabled site + installed system fonts
+  fontget category CAT [-s SITE] [--page N]      browse a site category
+  fontget categories [-s SITE]                   category trees
+  fontget list / remove FONT / open [FONT]       manage what's installed, open the page
+  fontget export / import FILE                   manifest of installed fonts (site + slug per line) and replay it
+  fontget sites [enable|disable NAME]            which font sites this tool may fetch from
+
+No font site is configured out of the box.  Adapters for a few sites ship in
+~/.config/fontget/sites-available/; `fontget sites enable NAME` is your own
+decision to fetch from that site.  Enabled order = lookup order for bare names.
+
+FONT is anything that names a font: "Sorean", "sorean", a font page or download
+URL on an enabled site, or a browser window title.  With no FONT, the currently
+open font-site Firefox window (via hyprctl) is used.  -s/--site pins one site.
+
+Everything runs as the user: uv keeps the deps in its cache, fonts go to
+~/.local/share/fonts/custom (fontconfig scans it automatically), fc-cache runs
+on that directory only.  No root anywhere.
+"""
+
+from __future__ import annotations
+
+import base64
+import html as htmlmod
+import json
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Annotated, Optional
+from urllib.parse import urlparse, parse_qs
+
+import httpx
+import typer
+from fontTools.ttLib import TTFont
+from rich import box
+from rich.console import Console
+from rich.table import Table
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+UA = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+PREFIX = "CUSTOM-"
+FONT_DIR = Path.home() / ".local/share/fonts/custom"
+FONT_EXT = {".ttf", ".otf", ".ttc"}
+NAME_IDS = (1, 4, 6, 16, 21)  # family, full, postscript, typographic family, WWS family
+CANCEL = 130  # omarchy-launch-floating-terminal-with-presentation skips "Done!" on 130
+
+
+
+app = typer.Typer(add_completion=False, no_args_is_help=True, rich_markup_mode="rich",
+                  pretty_exceptions_enable=False, help=__doc__.split("\n\n")[0])
+con = Console()
+err = Console(stderr=True, style="bold red")
+client = httpx.Client(headers={"User-Agent": UA}, follow_redirects=True, timeout=30)
+
+SiteOpt = Annotated[str, typer.Option("--site", "-s", help="an enabled site name, 'system', or auto (URL/window/lookup order decides)")]
+
+
+def site_arg(site: str, allow_system: bool = False) -> str:
+    """Validate -s; 'auto' when unset."""
+    if site in ("auto", "") or (allow_system and site == "system") or site in SITES:
+        return site or "auto"
+    err.print(f"unknown site {site!r}; enabled: {', '.join(SITES) or 'none'} (see `fontget sites`)")
+    raise typer.Exit(2)
+
+
+def need_sites():
+    if not SITES:
+        err.print("no font site is enabled. This tool ships with none configured; opt in with\n"
+                  "  fontget sites            # what is available\n"
+                  "  fontget sites enable dafont")
+        raise typer.Exit(2)
+
+
+def text(node, default: str = "") -> str:
+    return re.sub(r"\s+", " ", node.text()).strip() if node else default
+
+
+def get(url: str, **params) -> HTMLParser:
+    r = client.get(url, params=params or None)
+    if r.status_code == 404:
+        err.print(f"no page at {r.url}")
+        raise typer.Exit(1)
+    r.raise_for_status()
+    return HTMLParser(r.text)
+
+
+def free_license(lic: str) -> bool:
+    l = lic.lower().strip()
+    return (l.startswith("100%") or l == "free" or "domain" in l or "sil " in l or "ofl" in l
+            or "commercial" in l and "personal" not in l)
+
+
+def lic_markup(lic: str) -> str:
+    return f"[{'green' if free_license(lic) else 'yellow'}]{lic}[/]"
+
+
+# ---------------------------------------------------------------------- model
+
+@dataclass
+class Font:
+    site: str
+    slug: str
+    name: str = ""
+    author: str = ""
+    author_url: str = ""
+    category: str = ""          # human readable ("Fancy > Retro", "bold, retro, …")
+    category_key: str = ""      # what `category` takes: dafont theme id or 1001fonts slug
+    license: str = ""
+    downloads: str = ""
+    size: str = ""
+    files: str = ""
+    filenames: list[str] = field(default_factory=list)
+    first_seen: str = ""
+    glyphs: str = ""
+    note: str = ""
+    illustration: str = ""
+    download: str = ""
+    extra: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def url(self) -> str:
+        return SITE_IMPL[self.site].page_url(self.slug)
+
+
+# ---------------------------------------------------------------- adapters
+
+CONF_DIR = Path.home() / ".config/fontget"
+SITES_ENABLED = CONF_DIR / "sites"             # what you opted in to (symlinks or your own files), lookup order = file order
+SITES_AVAILABLE = CONF_DIR / "sites-available"  # shipped adapters, none active until enabled
+SITES: dict[str, type] = {}
+
+
+def load_sites():
+    """Exec every enabled adapter file; each defines `class Site` (see the header of any shipped adapter)."""
+    api = dict(Font=Font, text=text, get=get, client=client, con=con, err=err, Table=Table, box=box,
+               HTMLParser=HTMLParser, typer=typer, re=re, json=json, base64=base64, htmlmod=htmlmod,
+               urlparse=urlparse, parse_qs=parse_qs, Path=Path, SITES=SITES)
+    for f in sorted(SITES_ENABLED.glob("*.py")) if SITES_ENABLED.is_dir() else []:
+        ns = dict(api)
+        try:
+            exec(compile(f.read_text(), str(f), "exec"), ns)
+            site = ns["Site"]
+            SITES[site.name] = site
+        except Exception as e:
+            err.print(f"adapter {f.name} failed to load: {e!r}")
+
+
+load_sites()
+SITE_IMPL = SITES
+
+
+# ------------------------------------------------------------------ resolving
+
+def slugify(name: str) -> str:
+    s = re.sub(r"\.(font|zip)$", "", name.strip(), flags=re.I)
+    return re.sub(r"[^A-Za-z0-9]+", "-", s.lower()).strip("-")
+
+
+def parse_ref(ref: str) -> tuple[str | None, str]:
+    """(site, slug) for a URL, a window title, or a bare name (site None = unknown)."""
+    s = ref.strip()
+    if "://" in s or any(impl.owns(s) and "." in s.split()[0] for impl in SITE_IMPL.values()):
+        u = urlparse(s if "://" in s else "https://" + s)
+        for site, impl in SITE_IMPL.items():
+            if impl.owns(u.netloc) and (slug := impl.slug_from_url(u)):
+                return site, slug
+    for site, impl in SITE_IMPL.items():
+        if m := impl.title_re.match(s):
+            return site, slugify(m.group(1))
+    return None, slugify(s)
+
+
+def window_refs() -> list[tuple[str, str]]:
+    """Fonts open in browser windows, focused first."""
+    try:
+        clients = json.loads(subprocess.run(["hyprctl", "clients", "-j"], capture_output=True,
+                                            text=True, check=True).stdout)
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return []
+    clients.sort(key=lambda c: c.get("focusHistoryID", 99))
+    out = []
+    for c in clients:
+        site, slug = parse_ref(c.get("title", ""))
+        if site and slug:
+            out.append((site, slug))
+    return out
+
+
+def find_slug(site: str, slug: str, quiet: bool = False) -> str | None:
+    """Confirm a guessed slug exists on a site; otherwise try that site's search."""
+    impl = SITE_IMPL[site]
+    if impl.exists(slug):
+        return slug
+    want = re.sub(r"[^a-z0-9]", "", slug)
+    hits, _ = impl.search(slug.replace("-", " "))
+    for h in hits:
+        if re.sub(r"[^a-z0-9]", "", h.name.lower()) == want:
+            quiet or con.print(f"[dim]{slug} → [bold]{h.slug}[/bold] on {impl.name} (via search)[/dim]")
+            return h.slug
+    if len(hits) == 1:
+        quiet or con.print(f"[dim]{slug} → [bold]{hits[0].slug}[/bold] on {impl.name} (only search hit)[/dim]")
+        return hits[0].slug
+    return None
+
+
+def resolve(font: str | None, site: str) -> tuple[str, str]:
+    need_sites()
+    site = site_arg(site)
+    if not font:
+        refs = window_refs()
+        if site != "auto":
+            refs = [r for r in refs if r[0] == site]
+        if not refs:
+            err.print("no font given and no window of an enabled font site is open")
+            raise typer.Exit(2)
+        s, slug = refs[0]
+        con.print(f"[dim]using open {SITE_IMPL[s].name} window → [bold]{slug}[/bold][/dim]")
+        return s, slug
+    s, slug = parse_ref(font)
+    if s and site not in ("auto", s):
+        err.print(f"{font!r} is a {SITE_IMPL[s].name} reference but --site {site} was given")
+        raise typer.Exit(2)
+    order = [s] if s else ([site] if site in SITES else list(SITES))
+    for cand in order:
+        if found := find_slug(cand, slug, quiet=len(order) > 1):
+            if len(order) > 1 and (found != slug or cand != order[0]):
+                con.print(f"[dim]{slug} → [bold]{found}[/bold] on {SITE_IMPL[cand].name}[/dim]")
+            return cand, found
+    err.print(f"no font {slug!r} on " + " or ".join(SITE_IMPL[c].name for c in order) + "; try `fontget search`")
+    raise typer.Exit(1)
+
+
+# ------------------------------------------------------------------- output
+
+def print_info(f: Font, note: bool = True):
+    impl = SITE_IMPL[f.site]
+    t = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
+    t.add_column(style="bold cyan", justify="right")
+    t.add_column()
+    t.add_row("font", f"[bold]{f.name}[/bold]  [dim]({f.slug} on {impl.name})[/dim]")
+    t.add_row("author", f"{f.author}  [dim]{f.author_url}[/dim]")
+    t.add_row("category", f"{f.category}  [dim]{f.category_key}[/dim]" if f.category else "?")
+    t.add_row("license", lic_markup(f.license))
+    if f.downloads:
+        t.add_row("downloads", f.downloads)
+    if f.first_seen:
+        t.add_row("first seen", f.first_seen)
+    if f.glyphs:
+        t.add_row("glyphs", f.glyphs + "".join(f"  {k}={v}" for k, v in f.extra.items() if k in ("accents", "euro")))
+    t.add_row("files", f"{f.files}{' (' + f.size + ')' if f.size else ''}: " + ", ".join(f.filenames))
+    for k, v in f.extra.items():
+        if k not in ("accents", "euro"):
+            t.add_row(k, v)
+    t.add_row("page", f.url)
+    t.add_row("zip", f.download)
+    if f.illustration:
+        t.add_row("preview", f.illustration)
+    con.print(t)
+    if note and f.note:
+        con.print("[bold cyan]Note of the author[/bold cyan]")
+        con.print("  " + f.note.replace("\n", "\n  "), highlight=False)
+
+
+def print_listing(fonts: list[Font], title: str = ""):
+    t = Table(box=box.SIMPLE, padding=(0, 1), title=title or None, title_justify="left")
+    for col in ("site", "slug", "name", "author", "category", "license", "downloads"):
+        t.add_column(col, style="bold" if col == "slug" else None)
+    for f in fonts:
+        t.add_row(SITE_IMPL[f.site].name, f.slug, f.name, f.author, f.category, f.license, f.downloads.split(" (")[0])
+    con.print(t)
+
+
+def system_fonts(query: str) -> list[tuple[str, str, str]]:
+    out = subprocess.run(["fc-list", "--format", "%{family[0]}\t%{style[0]}\t%{file}\n"],
+                         capture_output=True, text=True).stdout
+    q = re.sub(r"[^a-z0-9]", "", query.lower())
+    rows = {}
+    for line in out.splitlines():
+        fam, style, file = (line.split("\t") + ["", ""])[:3]
+        if q in re.sub(r"[^a-z0-9]", "", fam.lower()):
+            rows.setdefault(fam, (fam, set(), file))[1].add(style)
+    return sorted((fam, ", ".join(sorted(st)), file) for fam, st, file in rows.values())
+
+
+# ------------------------------------------------------------ interactive
+
+def gum(*args: str) -> str:
+    """Run a gum widget; Esc/Ctrl-C cancels the whole flow like Omarchy's installers do."""
+    r = subprocess.run(["gum", *args], stdout=subprocess.PIPE, text=True)  # UI is drawn on stderr, keep it on the tty
+    if r.returncode != 0:
+        raise typer.Exit(CANCEL)
+    return r.stdout.strip()
+
+
+def ask_font() -> str:
+    need_sites()
+    con.print(f"[green]Let's install a font from {', '.join(SITES)} as CUSTOM-… for this user.[/green]\n")
+    args = ["input", "--prompt", "Font> ", "--placeholder", "name, slug or font page URL"]
+    if refs := window_refs():
+        args += ["--value", SITE_IMPL[refs[0][0]].page_url(refs[0][1])]
+    return gum(*args) or (_ for _ in ()).throw(typer.Exit(CANCEL))
+
+
+# ------------------------------------------------------------------ commands
+
+FontArg = Annotated[Optional[str], typer.Argument(help="name, slug, URL or window title; default: open dafont/1001fonts window")]
+
+
+@app.command()
+def info(
+    font: FontArg = None,
+    site: SiteOpt = "auto",
+    siblings: Annotated[int, typer.Option("--siblings", "-S", help="also list N fonts from the same category")] = 0,
+    note: Annotated[bool, typer.Option("--note/--no-note", help="print the author's note")] = True,
+    as_json: Annotated[bool, typer.Option("--json", help="machine-readable output")] = False,
+):
+    """Gather what the site knows about a font, using its category for context."""
+    s, slug = resolve(font, site)
+    f = SITE_IMPL[s].fetch(slug)
+    if as_json:
+        con.print_json(json.dumps({**f.__dict__, "url": f.url}))
+        return
+    print_info(f, note)
+    if siblings and f.category_key:
+        sibs = [x for x in SITE_IMPL[s].siblings(f) if x.slug != f.slug][:siblings]
+        print_listing(sibs, f"More in {f.category.split(',')[0]} on {SITE_IMPL[s].name}")
+
+
+@app.command()
+def search(query: Annotated[str, typer.Argument(help="search terms")],
+           site: SiteOpt = "auto", page: int = 1):
+    """Search every enabled site and the fonts already installed on this system."""
+    site = site_arg(site, allow_system=True)
+    found_any = False
+    for s in (list(SITES) if site == "auto" else ([site] if site in SITES else [])):
+        try:
+            fonts, total = SITE_IMPL[s].search(query, page)
+        except typer.Exit:
+            fonts, total = [], ""
+        if fonts:
+            found_any = True
+            print_listing(fonts, f"{SITE_IMPL[s].name}  [dim]{total}{', page ' + str(page) if page > 1 or total else ''}[/dim]")
+        else:
+            con.print(f"[dim]{SITE_IMPL[s].name}: nothing[/dim]")
+    if site in ("auto", "system"):
+        rows = system_fonts(query)
+        if rows:
+            found_any = True
+            t = Table(box=box.SIMPLE, padding=(0, 1), title="system fonts (fc-list)", title_justify="left")
+            t.add_column("family", style="bold"); t.add_column("styles"); t.add_column("file", style="dim")
+            for fam, styles, file in rows:
+                t.add_row(fam, styles, file.replace(str(Path.home()), "~"))
+            con.print(t)
+        else:
+            con.print("[dim]system: nothing[/dim]")
+    if not found_any:
+        raise typer.Exit(1)
+
+
+@app.command()
+def category(cat: Annotated[str, typer.Argument(help="site category: dafont id/name (115, retro), 1001fonts/fontmeme tag (retro, sans-serif)")],
+             site: SiteOpt = "auto", page: int = 1):
+    """Browse a category on one site (every enabled site when --site is auto)."""
+    need_sites()
+    site = site_arg(site)
+    for s in (list(SITES) if site == "auto" else [site]):
+        try:
+            title, fonts = SITE_IMPL[s].category(cat, page)
+        except typer.Exit:
+            con.print(f"[dim]{SITE_IMPL[s].name}: no category {cat!r}[/dim]")
+            continue
+        print_listing(fonts, f"{SITE_IMPL[s].name}: {title}  [dim]page {page}[/dim]")
+
+
+@app.command()
+def categories(site: SiteOpt = "auto"):
+    """Print the category trees of the enabled sites."""
+    need_sites()
+    site = site_arg(site)
+    for s in (list(SITES) if site == "auto" else [site]):
+        SITE_IMPL[s].print_categories()
+
+
+def rewrite_names(path: Path, prefix: str) -> str:
+    """Prefix the family-ish name records so the font shows up as CUSTOM-…; returns family."""
+    fnt = TTFont(str(path))
+    fam = ""
+    for rec in fnt["name"].names:
+        if rec.nameID not in NAME_IDS:
+            continue
+        s = rec.toUnicode().strip()
+        if not s or s.startswith(prefix):
+            continue
+        rec.string = prefix + s
+        if rec.nameID == 1 and not fam:
+            fam = prefix + s
+    if "CFF " in fnt:
+        cff = fnt["CFF "].cff
+        for n in list(cff.fontNames):
+            if not n.startswith(prefix):
+                cff.fontNames[cff.fontNames.index(n)] = prefix + n
+    fnt.save(str(path))
+    return fam
+
+
+def fetch_files(meta: Font, tmpd: Path, all_variants: bool) -> list[Path]:
+    """Download the site zip into tmpd and return the font files it holds (otf preferred over its ttf twin)."""
+    zpath = tmpd / f"{meta.slug}.zip"
+    with client.stream("GET", meta.download, headers={"Referer": meta.url}) as r:  # fontmeme insists on it
+        with zpath.open("wb") as fh:
+            for chunk in r.iter_bytes():
+                fh.write(chunk)
+    if not zipfile.is_zipfile(zpath):
+        err.print(f"{meta.download} did not return a zip (HTTP {r.status_code}, {zpath.stat().st_size} bytes)")
+        raise typer.Exit(1)
+    con.print(f"[dim]downloaded {zpath.name} ({zpath.stat().st_size // 1024} K)[/dim]")
+    with zipfile.ZipFile(zpath) as z:
+        members = [m for m in z.namelist()
+                   if Path(m).suffix.lower() in FONT_EXT
+                   and not m.startswith("__MACOSX") and not Path(m).name.startswith(".")]
+        z.extractall(tmpd / "x", members)
+    files = [p for p in sorted((tmpd / "x").rglob("*")) if p.suffix.lower() in FONT_EXT]
+    if not files:
+        err.print("zip contained no .ttf/.otf/.ttc files")
+        raise typer.Exit(1)
+    if not all_variants:
+        stems = {p.stem.lower() for p in files if p.suffix.lower() == ".otf"}
+        files = [p for p in files if not (p.suffix.lower() == ".ttf" and p.stem.lower() in stems)]
+    return files
+
+
+def install_files(files: list[Path], force: bool, keep_name: bool) -> list[tuple[str, str]]:
+    """Copy extracted font files into FONT_DIR as CUSTOM-…; returns (file, family) rows."""
+    FONT_DIR.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for p in files:
+        dest = FONT_DIR / f"{PREFIX}{p.name}"
+        if dest.exists() and not force:
+            con.print(f"[yellow]exists, skipping[/yellow] {dest.name}  (use --force)")
+            continue
+        work = p.with_name(f"{PREFIX}{p.name}")  # keep the extracted original untouched (preview may still use it)
+        shutil.copy2(p, work)
+        fam = rewrite_names(work, PREFIX) if not keep_name else ""
+        shutil.move(work, dest)
+        rows.append((dest.name, fam))
+    if rows:
+        subprocess.run(["fc-cache", "-f", str(FONT_DIR)], check=False)
+    return rows
+
+
+def report_installed(rows: list[tuple[str, str]]):
+    if not rows:
+        return
+    t = Table(box=box.SIMPLE, padding=(0, 1))
+    t.add_column("installed", style="bold"); t.add_column("family")
+    for r in rows:
+        t.add_row(*r)
+    con.print(t)
+    fams = subprocess.run(["fc-list", "--format", "%{family[0]}\n"], capture_output=True, text=True).stdout
+    con.print(f"[dim]fontconfig now knows {len({l for l in fams.splitlines() if l.startswith(PREFIX)})} {PREFIX} families[/dim]")
+
+
+# ------------------------------------------------------------------- preview
+
+PREVIEW_HTML = r"""<!doctype html><meta charset="utf-8"><title>fontget · __NAME__</title>
+<style>
+:root{--bg:#0f1117;--fg:#e6e6e6;--mut:#8a8f9c;--acc:#7aa2f7;--card:#171a23;--line:#262a36}
+body.light{--bg:#fafafa;--fg:#111;--mut:#666;--acc:#2f5fd1;--card:#fff;--line:#ddd}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,sans-serif}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;z-index:2}
+header h1{font-size:16px;margin:0 8px 0 0;white-space:nowrap}header .meta{color:var(--mut);font-size:12px;white-space:nowrap}
+input[type=text]{flex:1 1 320px;min-width:200px;font:16px system-ui;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+input[type=range]{width:140px}label{color:var(--mut);font-size:12px;display:flex;gap:6px;align-items:center}
+button{font:13px system-ui;padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+main{padding:16px 20px;display:grid;gap:14px}
+.style{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px}
+.style .name{color:var(--mut);font-size:12px;margin-bottom:6px;display:flex;justify-content:space-between}
+.sample{white-space:pre-wrap;word-break:break-word;line-height:1.15;min-height:1.2em}
+.strip{white-space:pre-wrap;word-break:break-all;color:var(--mut);margin-top:8px;line-height:1.2}
+#status{padding:0 20px 20px;color:var(--mut);white-space:pre-wrap}
+kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;font-size:11px}
+</style>
+<body>
+<header>
+ <h1>__NAME__</h1><span class="meta">__META__</span>
+ <input id="t" type="text" autofocus placeholder="type here" value="__TEXT__">
+ <label>size <input id="s" type="range" min="10" max="220" value="64"><span id="sv">64</span>px</label>
+ <label><input id="strip" type="checkbox" checked> glyph strip</label>
+ <button id="theme">light/dark</button>
+ <button id="install" class="primary" title="install into ~/.local/share/fonts/custom as CUSTOM-…">Install</button>
+ <button id="close" title="Esc">Close</button>
+</header>
+<main id="m"></main>
+<div id="status">Type in the field; every style ships in the zip renders live.  <kbd>Esc</kbd> closes without installing.</div>
+<script>
+const FILES=__FILES__;
+const STRIP="ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 !?&@#%$.,:;'\"()[]{}-+=/*<>";
+const css=FILES.map((f,i)=>`@font-face{font-family:"pv${i}";src:url(/font/${i});font-display:block}`).join("\n");
+document.head.insertAdjacentHTML("beforeend",`<style>${css}</style>`);
+const m=document.getElementById("m"),t=document.getElementById("t"),s=document.getElementById("s"),sv=document.getElementById("sv"),st=document.getElementById("status"),strip=document.getElementById("strip");
+m.innerHTML=FILES.map((f,i)=>`<div class="style"><div class="name"><span>${f.name}</span><span>${f.size} · ${f.glyphs} glyphs</span></div><div class="sample" style="font-family:'pv${i}'"></div><div class="strip" style="font-family:'pv${i}'">${STRIP}</div></div>`).join("");
+function render(){const v=t.value||t.placeholder;document.querySelectorAll(".sample").forEach(e=>{e.textContent=v;e.style.fontSize=s.value+"px"});document.querySelectorAll(".strip").forEach(e=>{e.style.fontSize=Math.max(14,s.value/2.5)+"px";e.style.display=strip.checked?"":"none"});sv.textContent=s.value}
+t.oninput=render;s.oninput=render;strip.onchange=render;render();
+document.getElementById("theme").onclick=()=>document.body.classList.toggle("light");
+async function post(p){try{const r=await fetch(p,{method:"POST"});return await r.text()}catch(e){return ""}}
+document.getElementById("install").onclick=async()=>{st.textContent="installing…";const r=await post("/install");st.textContent=r;document.getElementById("install").disabled=true};
+document.getElementById("close").onclick=async()=>{await post("/close");window.close();st.textContent="closed — you can close this window."};
+document.addEventListener("keydown",e=>{if(e.key==="Escape")document.getElementById("close").onclick()});
+setInterval(()=>fetch("/ping").catch(()=>{}),1500);
+</script>"""
+
+
+def run_preview(meta: Font, files: list[Path], text_default: str, force: bool, keep_name: bool,
+                open_browser: bool = True) -> list[tuple[str, str]]:
+    """Serve the preview page on localhost until the page closes; returns what got installed."""
+    state = {"last_ping": 0.0, "installed": [], "done": threading.Event()}
+    file_meta = []
+    for p in files:
+        try:
+            f = TTFont(str(p), lazy=True)
+            fam = f["name"].getDebugName(1) or p.stem
+            sub = f["name"].getDebugName(2) or ""
+            glyphs = len(f.getGlyphOrder())
+        except Exception:
+            fam, sub, glyphs = p.stem, "", 0
+        file_meta.append({"name": f"{fam} {sub}".strip() + f"  ({p.name})", "size": f"{p.stat().st_size // 1024} K", "glyphs": glyphs})
+    lic = meta.license or "?"
+    page = (PREVIEW_HTML.replace("__NAME__", htmlmod.escape(meta.name))
+            .replace("__META__", htmlmod.escape(f"{SITE_IMPL[meta.site].name} · {meta.author} · {lic}"))
+            .replace("__TEXT__", htmlmod.escape(text_default, quote=True))
+            .replace("__FILES__", json.dumps(file_meta))).encode()
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, body: bytes, ctype="text/plain; charset=utf-8", code=200):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/":
+                state["last_ping"] = time.time()
+                self._send(page, "text/html; charset=utf-8")
+            elif self.path == "/ping":
+                state["last_ping"] = time.time()
+                self._send(b"ok")
+            elif m := re.fullmatch(r"/font/(\d+)", self.path):
+                i = int(m.group(1))
+                if i < len(files):
+                    self._send(files[i].read_bytes(), "font/otf" if files[i].suffix.lower() == ".otf" else "font/ttf")
+                else:
+                    self._send(b"no", code=404)
+            else:
+                self._send(b"no", code=404)
+
+        def do_POST(self):
+            if self.path == "/install":
+                try:
+                    rows = install_files(files, force, keep_name)
+                    state["installed"] = rows
+                    msg = ("installed " + ", ".join(f"{f} → {fam or 'name kept'}" for f, fam in rows) + "\ninto " + str(FONT_DIR)
+                           if rows else "nothing installed (already present? re-run with --force)")
+                except Exception as e:  # surface it on the page instead of a dead button
+                    msg = f"install failed: {e!r}"
+                self._send(msg.encode())
+            elif self.path == "/close":
+                self._send(b"bye")
+                state["done"].set()
+            else:
+                self._send(b"no", code=404)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/"
+    con.print(f"preview: [bold]{url}[/bold]  [dim](type in the field; Install or Esc there, or Ctrl-C here)[/dim]")
+    if open_browser:
+        launcher = ["omarchy-launch-webapp", url] if shutil.which("omarchy-launch-webapp") else ["xdg-open", url]
+        subprocess.Popen(launcher, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    started = time.time()
+    try:
+        while not state["done"].is_set():
+            time.sleep(0.5)
+            lp = state["last_ping"]
+            if (lp and time.time() - lp > 6) or (not lp and time.time() - started > 120):
+                break  # page gone (window closed) or browser never showed up
+    except KeyboardInterrupt:
+        pass
+    srv.shutdown()
+    # --app browser windows ignore window.close(); tidy the leftover window ourselves
+    subprocess.run(["bash", "-c", "hyprctl clients -j | jq -r '.[] | select(.title|startswith(\"fontget · \")) | .address' | xargs -r -I{} hyprctl dispatch closewindow address:{}"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return state["installed"]
+
+
+# ------------------------------------------------------------------- install
+
+@app.command()
+def preview(
+    font: FontArg = None,
+    site: SiteOpt = "auto",
+    sample: Annotated[str, typer.Option("--text", "-t", help="initial sample text")] = "The quick brown fox jumps over the lazy dog 0123456789",
+    all_variants: Annotated[bool, typer.Option("--all", help="also show .ttf twins of .otf faces")] = False,
+    keep_name: Annotated[bool, typer.Option("--keep-name", help="if installed from the page, keep the internal family name")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="if installed from the page, overwrite existing files")] = False,
+    no_browser: Annotated[bool, typer.Option("--no-browser", help="just print the URL")] = False,
+):
+    """Temp-download the font and open a page where you type text and see every style; Install from there."""
+    s, slug = resolve(font, site)
+    meta = SITE_IMPL[s].fetch(slug)
+    con.print(f"[bold]{meta.name}[/bold] by {meta.author}  [dim]{SITE_IMPL[s].name} · {meta.category}[/dim]  {lic_markup(meta.license)}")
+    with tempfile.TemporaryDirectory(prefix=f"fontget-{slug}-") as tmp:
+        files = fetch_files(meta, Path(tmp), all_variants)
+        rows = run_preview(meta, files, sample, force, keep_name, open_browser=not no_browser)
+    if rows:
+        record_provenance(meta, rows)
+        report_installed(rows)
+    else:
+        con.print("[dim]preview closed, nothing installed[/dim]")
+
+
+@app.command()
+def install(
+    font: FontArg = None,
+    site: SiteOpt = "auto",
+    all_variants: Annotated[bool, typer.Option("--all", help="keep both .otf and .ttf when a face ships as both (default: prefer .otf)")] = False,
+    keep_name: Annotated[bool, typer.Option("--keep-name", help="only prefix the file name, leave the internal family name alone")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="overwrite already-installed files")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="download and show what would be installed, install nothing")] = False,
+    interactive: Annotated[bool, typer.Option("--interactive", "-i", help="gum prompts (what the Omarchy menu and keybinding run)")] = False,
+):
+    """Download the zip to tmp, prefix everything with CUSTOM-, install for this user."""
+    s, slug = resolve(font or (ask_font() if interactive else None), site)
+    impl = SITE_IMPL[s]
+    meta = impl.fetch(slug)  # the zip link can differ from the page slug (dafont bebas-neue → bebas_neue)
+    want_preview = False
+    if interactive:
+        print_info(meta, note=False)
+        if meta.note:
+            con.print("[bold cyan]Note of the author[/bold cyan]  [dim](first lines)[/dim]")
+            con.print("  " + "\n  ".join(l for l in meta.note.splitlines() if l.strip())[:600], highlight=False)
+        con.print()
+        choice = gum("choose", "--header", f"{meta.name} from {impl.name} ({meta.files} file(s)) as {PREFIX}… for this user:",
+                     "Install", "Preview first (type your own text)", "Cancel")
+        if choice.startswith("Cancel"):
+            raise typer.Exit(CANCEL)
+        want_preview = choice.startswith("Preview")
+    else:
+        con.print(f"[bold]{meta.name}[/bold] by {meta.author}  [dim]{impl.name} · {meta.category}[/dim]  {lic_markup(meta.license)}")
+    with tempfile.TemporaryDirectory(prefix=f"fontget-{slug}-") as tmp:
+        files = fetch_files(meta, Path(tmp), all_variants)
+        if dry_run:
+            for p in files:
+                con.print(f"  would install {PREFIX}{p.name}  [dim]({p.stat().st_size // 1024} K)[/dim]")
+            raise typer.Exit(0)
+        if want_preview:
+            rows = run_preview(meta, files, "The quick brown fox jumps over the lazy dog 0123456789", force, keep_name)
+            if rows:
+                record_provenance(meta, rows)
+                report_installed(rows)
+                return
+            gum("confirm", f"Install {meta.name} anyway?")
+        rows = install_files(files, force, keep_name)
+    if not rows:
+        raise typer.Exit(0)
+    record_provenance(meta, rows)
+    report_installed(rows)
+
+
+@app.command("list")
+def list_installed():
+    """List the CUSTOM- fonts fontconfig can see (user dir and the old /usr/local one)."""
+    out = subprocess.run(["fc-list", "--format", "%{file}\t%{family[0]}\t%{style[0]}\n"],
+                         capture_output=True, text=True).stdout
+    rows = sorted(l.split("\t") for l in out.splitlines() if f"/{PREFIX}" in l)
+    t = Table(box=box.SIMPLE, padding=(0, 1))
+    t.add_column("family", style="bold"); t.add_column("style"); t.add_column("file", style="dim")
+    for file, fam, style in rows:
+        t.add_row(fam, style, file.replace(str(Path.home()), "~"))
+    con.print(t)
+
+
+@app.command()
+def remove(font: Annotated[str, typer.Argument(help="slug or any part of the file name")],
+           yes: Annotated[bool, typer.Option("--yes", "-y")] = False):
+    """Remove installed CUSTOM- files matching FONT from the user font dir."""
+    needle = re.sub(r"[^a-z0-9]", "", slugify(font))
+    hits = [p for p in FONT_DIR.glob(f"{PREFIX}*") if needle in re.sub(r"[^a-z0-9]", "", p.name.lower())]
+    if not hits:
+        con.print(f"nothing in {FONT_DIR} matches {font!r}")
+        raise typer.Exit(1)
+    for p in hits:
+        con.print(f"  {p.name}")
+    if yes or typer.confirm(f"remove {len(hits)} file(s)?"):
+        for p in hits:
+            p.unlink()
+        subprocess.run(["fc-cache", "-f", str(FONT_DIR)], check=False)
+
+
+@app.command("open")
+def open_page(font: FontArg = None, site: SiteOpt = "auto"):
+    """Open the font's page in the browser."""
+    s, slug = resolve(font, site)
+    subprocess.Popen(["xdg-open", SITE_IMPL[s].page_url(slug)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ---------------------------------------------------------- manifest / sites
+
+PROVENANCE = FONT_DIR / ".fontget.json"
+
+
+def record_provenance(meta: Font, rows: list[tuple[str, str]]):
+    try:
+        data = json.loads(PROVENANCE.read_text()) if PROVENANCE.exists() else {}
+    except ValueError:
+        data = {}
+    for file, _ in rows:
+        data[file] = {"site": meta.site, "slug": meta.slug, "name": meta.name, "url": meta.url}
+    PROVENANCE.write_text(json.dumps(data, indent=1, sort_keys=True))
+
+
+@app.command()
+def export():
+    """Print a manifest of the installed CUSTOM- fonts this tool fetched: `site slug` per line."""
+    if not PROVENANCE.exists():
+        con.print("[dim]nothing recorded yet (only fonts installed by fontget are known)[/dim]")
+        raise typer.Exit(1)
+    seen = set()
+    for file, p in sorted(json.loads(PROVENANCE.read_text()).items()):
+        key = (p["site"], p["slug"])
+        if key in seen or not (FONT_DIR / file).exists():
+            continue
+        seen.add(key)
+        print(f"{p['site']} {p['slug']}  # {p['name']}")
+
+
+@app.command("import")
+def import_manifest(file: Annotated[Path, typer.Argument(help="manifest from `fontget export`")],
+                    force: Annotated[bool, typer.Option("--force", "-f")] = False):
+    """Install every `site slug` line of a manifest (sites must be enabled here)."""
+    need_sites()
+    for line in file.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        site, slug = line.split(None, 1)
+        if site not in SITES:
+            con.print(f"[yellow]skip[/yellow] {line}: site {site!r} not enabled")
+            continue
+        meta = SITE_IMPL[site].fetch(slug)
+        with tempfile.TemporaryDirectory(prefix=f"fontget-{slug}-") as tmp:
+            rows = install_files(fetch_files(meta, Path(tmp), False), force, False)
+        record_provenance(meta, rows)
+        report_installed(rows)
+
+
+sites_app = typer.Typer(help="Which font sites this tool may fetch from. None are enabled until you say so.",
+                        invoke_without_command=True, no_args_is_help=False)
+app.add_typer(sites_app, name="sites")
+
+
+@sites_app.callback()
+def sites_list(ctx: typer.Context):
+    """List available and enabled site adapters."""
+    if ctx.invoked_subcommand:
+        return
+    enabled = {p.resolve(): p for p in SITES_ENABLED.glob("*.py")} if SITES_ENABLED.is_dir() else {}
+    t = Table(box=box.SIMPLE, padding=(0, 1))
+    t.add_column("site", style="bold"); t.add_column("state"); t.add_column("file", style="dim")
+    for p in sorted(SITES_AVAILABLE.glob("*.py")):
+        on = p.resolve() in enabled
+        t.add_row(p.stem, "[green]enabled[/green]" if on else "[dim]available[/dim]", str(enabled[p.resolve()] if on else p).replace(str(Path.home()), "~"))
+    for r, p in sorted(enabled.items(), key=lambda kv: kv[1].name):
+        if SITES_AVAILABLE not in r.parents:
+            t.add_row(p.stem, "[green]enabled[/green] (your own)", str(p).replace(str(Path.home()), "~"))
+    con.print(t)
+    con.print(f"[dim]lookup order: {', '.join(SITES) or '(none enabled)'}  ·  enable with `fontget sites enable NAME`[/dim]")
+
+
+@sites_app.command("enable")
+def sites_enable(name: Annotated[str, typer.Argument(help="adapter from sites-available, e.g. dafont")]):
+    """Opt in to a site: link its adapter into ~/.config/fontget/sites/ (appended to the lookup order)."""
+    src = SITES_AVAILABLE / f"{name}.py"
+    if not src.exists():
+        err.print(f"no adapter {name!r} in {SITES_AVAILABLE}")
+        raise typer.Exit(1)
+    SITES_ENABLED.mkdir(parents=True, exist_ok=True)
+    if any(p.resolve() == src.resolve() for p in SITES_ENABLED.glob("*.py")):
+        con.print(f"{name} already enabled")
+        return
+    n = 1 + max((int(m.group(1)) for p in SITES_ENABLED.glob("*.py") if (m := re.match(r"(\d+)-", p.name))), default=0)
+    (SITES_ENABLED / f"{n:02d}-{name}.py").symlink_to(src)
+    con.print(f"enabled {name} → you are choosing to fetch from that site under its terms")
+
+
+@sites_app.command("disable")
+def sites_disable(name: str):
+    """Opt out again."""
+    hits = [p for p in SITES_ENABLED.glob("*.py") if p.stem.split("-", 1)[-1] == name]
+    if not hits:
+        err.print(f"{name} is not enabled")
+        raise typer.Exit(1)
+    for p in hits:
+        p.unlink()
+    con.print(f"disabled {name}")
+
+
+if __name__ == "__main__":
+    try:
+        app()
+    except httpx.HTTPError as e:
+        err.print(f"network error: {e}")
+        sys.exit(1)

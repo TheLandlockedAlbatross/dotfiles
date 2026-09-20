@@ -19,6 +19,10 @@
 !.config/
 !.config/shell/
 !.config/shell/*
+!.config/fontget/
+!.config/fontget/README.md
+!.config/fontget/sites-available/
+!.config/fontget/sites-available/*
 !.config/omarchy/
 !.config/omarchy/themes/
 !.config/omarchy/themes/ethereal-extended/
@@ -168,7 +172,7 @@
 !.local/bin/bw-backup-watcher
 !.local/bin/bw-vault-decrypt
 !.local/bin/seal
-!.local/bin/dafont
+!.local/bin/fontget
 !.local/bin/unseal
 !.local/bin/shokz
 # omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts

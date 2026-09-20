@@ -27,4 +27,14 @@
   // Example: replace the default About action by reusing the same id. Existing
   // fields are kept unless overridden.
   // "about": {"icon":"","label":"About","action":"omarchy-launch-or-focus-tui \"zsh -c 'fastfetch; read -k 1'\""},
+
+  // fontget (~/.local/bin/fontget): sudo-less CUSTOM- installs from dafont.com,
+  // 1001fonts.com or fontmeme.com into ~/.local/share/fonts/custom, same flow as
+  // the stock Nerd Font rows next to them (floating presentation terminal +
+  // gum). The second row only shows while some window title looks like a font
+  // tab on one of those sites (fontmeme titles carry no host, just "… Font
+  // Download"), and pre-fills from it.
+  "install.style.font.fontget": {"icon":"","label":"From dafont / 1001fonts / fontmeme","aliases":["fontget","dafont","1001fonts","fontmeme"],"description":"Any dafont.com, 1001fonts.com or fontmeme.com font, installed for this user with the CUSTOM- prefix","action":"omarchy-launch-floating-terminal-with-presentation 'fontget install -i'"},
+  "install.style.font.fontget-window": {"icon":"","label":"From the open font-site tab","when":"hyprctl clients -j | grep -qE '\\| dafont\\.com|· 1001 Fonts| Font Download'","action":"omarchy-launch-floating-terminal-with-presentation 'fontget install -i'"},
+  "install.style.font.fontget-preview": {"icon":"󰈔","label":"Preview the open font-site tab","description":"Temp download, type your own text in a browser window, install from there","when":"hyprctl clients -j | grep -qE '\\| dafont\\.com|· 1001 Fonts| Font Download'","action":"omarchy-launch-floating-terminal-with-presentation 'fontget preview'"}
 }
