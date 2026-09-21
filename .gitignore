@@ -122,6 +122,8 @@
 !.config/tmux/tmux.conf
 !.config/herdr/
 !.config/herdr/config.toml
+!.config/tensaku/
+!.config/tensaku/state.toml
 !.config/herdr/plugins/
 !.config/herdr/plugins/tla.recent/
 !.config/herdr/plugins/tla.recent/herdr-plugin.toml
