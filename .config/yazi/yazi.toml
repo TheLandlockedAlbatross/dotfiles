@@ -1,7 +1,7 @@
 # A TOML linter such as https://taplo.tamasfe.dev/ can use this schema to validate your config.
 # If you encounter any issues, please make an issue at https://github.com/yazi-rs/schemas.
 
-[manager]
+[mgr]
 ratio          = [ 1, 4, 3 ]
 sort_by        = "alphabetical"
 sort_sensitive = false
@@ -29,42 +29,47 @@ ueberzug_scale  = 1
 ueberzug_offset = [ 0, 0, 0, 0 ]
 
 [opener]
+# yazi 26.x: files are substituted into `run` as placeholders (%s all selected, %s1 first,
+# %d1 first file's dirname), already shell-quoted; "$@"/"$1" are no longer passed.
 edit = [
-	{ run = '${EDITOR:-vi} "$@"', desc = "$EDITOR", block = true, for = "unix" },
-	{ run = 'code %*',    orphan = true, desc = "code",           for = "windows" },
-	{ run = 'code -w %*', block = true,  desc = "code (block)",   for = "windows" },
+	{ run = '${EDITOR:-vi} %s', desc = "$EDITOR",      for = "unix",    block = true },
+	{ run = 'code %s',          desc = "code",         for = "windows", orphan = true },
+	{ run = 'code -w %s',       desc = "code (block)", for = "windows", block = true },
 ]
 open = [
-	{ run = 'xdg-open "$1"',                desc = "Open", for = "linux" },
-	{ run = 'open "$@"',                    desc = "Open", for = "macos" },
-	{ run = 'start "" "%1"', orphan = true, desc = "Open", for = "windows" },
-	{ run = 'termux-open "$1"',             desc = "Open", for = "android" },
+	{ run = 'xdg-open %s1',    desc = "Open", for = "linux" },
+	{ run = 'open %s',         desc = "Open", for = "macos" },
+	{ run = 'start "" %s1',    desc = "Open", for = "windows", orphan = true },
+	{ run = 'termux-open %s1', desc = "Open", for = "android" },
+]
+image = [
+	{ run = 'feh %s',       desc = "feh",  for = "unix", orphan = true },
+	{ run = 'xdg-open %s1', desc = "Open", for = "linux" },
 ]
 reveal = [
-	{ run = 'xdg-open "$(dirname "$1")"',           desc = "Reveal", for = "linux" },
-	{ run = 'open -R "$1"',                         desc = "Reveal", for = "macos" },
-	{ run = 'explorer /select,"%1"', orphan = true, desc = "Reveal", for = "windows" },
-	{ run = 'termux-open "$(dirname "$1")"',        desc = "Reveal", for = "android" },
-	{ run = '''exiftool "$1"; echo "Press enter to exit"; read _''', block = true, desc = "Show EXIF", for = "unix" },
+	{ run = 'xdg-open %d1',         desc = "Reveal", for = "linux" },
+	{ run = 'open -R %s1',          desc = "Reveal", for = "macos" },
+	{ run = 'explorer /select,%s1', desc = "Reveal", for = "windows", orphan = true },
+	{ run = 'termux-open %d1',      desc = "Reveal", for = "android" },
+	{ run = "clear; exiftool %s1; echo 'Press enter to exit'; read _", desc = "Show EXIF", for = "unix", block = true },
 ]
 extract = [
-	{ run = 'ya pub extract --list "$@"', desc = "Extract here", for = "unix" },
-	{ run = 'ya pub extract --list %*',   desc = "Extract here", for = "windows" },
+	{ run = 'ya pub extract --list %s', desc = "Extract here" },
 ]
 play = [
-	{ run = 'xdg-open "$1"',                desc = "Open", for = "linux" },
-	#{ run = 'mpv --force-window "$@"', orphan = true, for = "unix" },
-	#{ run = 'mpv --force-window %*', orphan = true, for = "windows" },
-	{ run = '''mediainfo "$1"; echo "Press enter to exit"; read _''', block = true, desc = "Show media info", for = "unix" },
+	{ run = 'mpv --force-window %s', desc = "mpv",  for = "unix",  orphan = true },
+	{ run = 'xdg-open %s1',          desc = "Play", for = "linux", orphan = true },
+	{ run = "mediainfo %s1; echo 'Press enter to exit'; read _", block = true, desc = "Show media info", for = "unix" },
 ]
 
 [open]
 rules = [
 	# Folder
-	{ url = "*/", use = [ "edit", "open", "reveal" ] },
+	{ mime = "folder/*", use = [ "edit", "open", "reveal" ] },
 	# Text
 	{ mime = "text/*", use = [ "edit", "reveal" ] },
-	# Image
+	# Image — route through xdg-open so ~/.config/mimeapps.list owns image
+	# opening (xcf -> gimp, etc.); the "open" opener is xdg-open on Linux.
 	{ mime = "image/*", use = [ "open", "reveal" ] },
 	# Media
 	{ mime = "{audio,video}/*", use = [ "play", "reveal" ] },
