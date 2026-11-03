@@ -1,3 +1,4 @@
+onboarding = false
 # Mirrors the Omarchy tmux config in config/tmux/tmux.conf
 # tmux session -> herdr workspace, tmux window -> herdr tab, tmux pane -> herdr pane
 
@@ -9,6 +10,10 @@ name = "terminal"
 # The active tab is drawn as panel_bg text on an accent background, so panel_bg
 # has to be dark for it to read - same colors as status-left's "#[fg=black,bg=blue]"
 panel_bg = "black"
+# The terminal theme fills the active Space/Agent row with color8, a mid-tone in
+# most omarchy themes that buries dim text. Use bg mixed toward color8 instead.
+active_row_bg = "#252d4c"   # bg + 30% color8
+selection_bg = "#2f395b"    # bg + 40% color8, Navigate-mode cursor row
 
 [terminal]
 # Matches -c "#{pane_current_path}" on every split, window, and session
@@ -32,10 +37,11 @@ close_pane = ["prefix+x", "alt+esc"]
 zoom = "prefix+z"
 last_pane = "prefix+;"
 
-focus_pane_left = "ctrl+alt+left"
-focus_pane_down = "ctrl+alt+down"
-focus_pane_up = "ctrl+alt+up"
-focus_pane_right = "ctrl+alt+right"
+# Like select-pane on prefix+arrows, plus the C-M-arrow shortcuts
+focus_pane_left = ["prefix+left", "ctrl+alt+left"]
+focus_pane_down = ["prefix+down", "ctrl+alt+down"]
+focus_pane_up = ["prefix+up", "ctrl+alt+up"]
+focus_pane_right = ["prefix+right", "ctrl+alt+right"]
 
 resize_mode = ["prefix+ctrl+left", "prefix+ctrl+down", "prefix+ctrl+up", "prefix+ctrl+right"]
 
@@ -67,6 +73,19 @@ close_workspace = "prefix+shift+k"
 previous_workspace = ["prefix+shift+p", "alt+up"]
 next_workspace = ["prefix+shift+n", "alt+down"]
 
+# tla.recent plugin: most-recent-first tabs + done/working/idle Agents sort
+[[keys.command]]
+key = "prefix+m"
+type = "plugin_action"
+command = "tla.recent.toggle"
+description = "toggle recent mode"
+
+[[keys.command]]
+key = "prefix+shift+m"
+type = "plugin_action"
+command = "tla.recent.ctx"
+description = "toggle context-size sort"
+
 [ui]
 accent = "blue"
 
@@ -97,4 +116,5 @@ window_title = "{hostname}: {workspace}"
 # Claude panes in the sidebar: show the session's live terminal title (the
 # /rename name) instead of bare workspace/tab numbers.
 [ui.sidebar.agents.rows_by_agent]
-claude = [["state_icon", "state_text", "workspace", "tab"], ["terminal_title_stripped"]]
+# $ctx is the context-window usage reported by plugins/tla.recent/ctx-statusline.py.
+claude = [["state_icon", "state_text", { token = "$ctx", dim = true }, "workspace", "tab"], ["terminal_title_stripped"]]

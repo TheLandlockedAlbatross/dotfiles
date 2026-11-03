@@ -9,7 +9,8 @@
 #   HISTORY_SCOPE / HISTORY_SCOPE_<SHELL> = local (default) | global
 #     local:  use ./.<shell>_history if it exists and cwd != HOME, else ~/.<shell>_history
 #     global: always ~/.<shell>_history
-#   (fish has no per-directory history; always ~/.local/share/fish/fish_history)
+#   (fish's global file is ~/.local/share/fish/fish_history; a local ./.fish_history, e.g. one
+#   seeded by hh, is read the same way even though fish itself keeps writing globally)
 #
 # Output: numbered, time-ordered entries tagged by source shell. Entries without timestamps
 # sort first (in file order). Multi-line commands are shown joined with ' | ' in the listing.
@@ -35,16 +36,17 @@ fi
 
 specs=("$@")
 if [[ ${#specs[@]} -eq 0 ]]; then
-    for sh in zsh bash; do
+    for sh in zsh bash fish; do
         scope_var="HISTORY_SCOPE_${sh^^}"
         scope="${!scope_var:-${HISTORY_SCOPE:-local}}"
+        global="${HOME}/.${sh}_history"
+        [[ "${sh}" == "fish" ]] && global="${HOME}/.local/share/fish/fish_history"
         if [[ "${scope}" == "local" && -f "${PWD}/.${sh}_history" && "${PWD}" != "${HOME}" ]]; then
             specs+=("${sh}:${PWD}/.${sh}_history")
         else
-            specs+=("${sh}:${HOME}/.${sh}_history")
+            specs+=("${sh}:${global}")
         fi
     done
-    specs+=("fish:${HOME}/.local/share/fish/fish_history")
 fi
 
 args=()

@@ -1,130 +1,169 @@
--- subedit.lua
--- Stage 1: view the currently selected external SRT in a uosc menu, focused
--- on the cue nearest the current playback position. Playback is not paused.
--- Selecting a cue seeks to its start; the menu stays open (Esc closes).
+-- subedit.lua - edit the subtitle you are watching, from inside mpv.
 --
--- Stage 2: resolve the real file behind the subtitle source and report it in
--- the menu footnote. Local files are checked directly; Jellyfin stream URLs
--- (what jellyfin-mpv-shim feeds to sub-add) are resolved via the server API
--- using the ApiKey already embedded in the URL, mapped from the server's
--- container path to the storage host path, and probed for writability over
--- batch-mode ssh. The result is cached per source and stashed in
--- state.edit_target for stage 3 (floating nvim + staged push-back).
+-- Three atomic steps, each reported on screen so you can trust what happened:
+--   1. ASSESS   what subtitles this item really has (none / external .srt /
+--               external other format / embedded text / image), via the
+--               subedit-apply service next to Jellyfin (it sees the real files).
+--   2. FETCH    the genuine subtitle text and open a uosc menu on the cue
+--               nearest the current playback time. Enter on a cue opens mpv's
+--               input console pre-filled with that cue's text.
+--   3. SUBMIT   Enter in the console posts the edit to the server; Esc cancels
+--               and nothing is sent. The server replaces the cue in the sidecar
+--               atomically (with a one-time .bak), or writes a new sidecar when
+--               the source is embedded / not .srt, then Jellyfin is refreshed
+--               and the track in mpv is reloaded. The outcome is shown as OSD.
 --
--- Binding: input.conf ->  ctrl+e  script-binding subedit/subedit-open
--- Options: script-opts/subedit.conf (ssh_target, path_map, api_token, ssh_timeout)
+-- Line breaks inside a cue are shown in the console as " \n " and turned back
+-- into real line breaks on submit.
+--
+-- Binding:  input.conf ->  ctrl+e  script-binding subedit/subedit-open
+-- Options:  script-opts/subedit.conf
+--   apply_url   base url of subedit-apply (default the puck node, https 8448)
+--   lang        language tag for a NEW sidecar (default en)
+--   api_token   optional Jellyfin token; normally NOT needed - the shim's own
+--               Authorization header on mpv (http-header-fields) is reused,
+--               and a token in the track url is used as a fallback.
+-- Self-test:  SUBEDIT_SELFTEST=<srt> [SUBEDIT_T=<s>] mpv --no-config --idle=once --script=subedit.lua
 
 local mp = require 'mp'
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 local options = require 'mp.options'
-
-local SCRIPT = mp.get_script_name()
+local input_ok, input = pcall(require, 'mp.input')
 
 local opts = {
-    -- ssh destination that can reach the real subtitle files
-    ssh_target = 'root@puck.cerberus-canopus.ts.net',
-    -- comma-separated serverprefix=hostprefix rewrites for MediaStream Path
-    path_map = '/media/=/mnt/zfs/AOC-Media-12TB-1/',
-    -- normally empty: the token is taken from the subtitle URL itself.
-    -- Set only if that token cannot see MediaStream Path (needs admin).
+    apply_url = 'https://jellyfin.cerberus-canopus.ts.net:8448',
+    lang = 'en',
     api_token = '',
-    ssh_timeout = 6,
 }
 options.read_options(opts, 'subedit')
 
 local state = {
-    cues = nil,        -- parsed cue list for the open menu
-    source = nil,      -- path or URL the cues came from
-    track_title = nil,
-    footnote = nil,
-    edit_target = nil, -- resolution result for stage 3
     menu_open = false,
+    source = nil,      -- track url / path the cues came from
+    cues = nil,
+    assess = nil,      -- result of step 1
+    sub = nil,         -- the server-side stream dict we are editing (or nil)
+    item = nil, msid = nil,
+    editing = false,
 }
-local url_cache = {}     -- source URL -> raw srt content
-local resolve_cache = {} -- source -> edit_target table
 
-local function osd(text)
-    mp.osd_message('subedit: ' .. text, 3)
+-- ---------------------------------------------------------------------------
+-- helpers
+
+local function osd(text, secs)
+    mp.osd_message('[subedit] ' .. text, secs or 4)
     msg.info(text)
 end
 
+local function fmt_time(t)
+    local h = math.floor(t / 3600)
+    local m = math.floor(t % 3600 / 60)
+    local s = t % 60
+    return string.format('%02d:%02d:%06.3f', h, m, s):gsub('%.', ',')
+end
+
+local function fmt_srt(t)
+    local h = math.floor(t / 3600)
+    local m = math.floor(t % 3600 / 60)
+    local s = math.floor(t % 60)
+    local ms = math.floor((t - math.floor(t)) * 1000 + 0.5)
+    return string.format('%02d:%02d:%02d,%03d', h, m, s, ms)
+end
+
 local function is_url(s)
-    return s:match('^%a[%w+.-]*://') ~= nil
+    return s and s:match('^https?://') ~= nil
 end
 
-local function strip_bom(s)
-    if s:sub(1, 3) == '\239\187\191' then return s:sub(4) end
-    return s
+local function player_auth_header()
+    local fields = mp.get_property_native('http-header-fields')
+    if type(fields) == 'table' then
+        for _, f in ipairs(fields) do
+            if type(f) == 'string' and f:lower():match('^authorization:%s*mediabrowser') then
+                return f
+            end
+        end
+    end
+    return nil
 end
 
-local function basename(path)
-    return path:match('([^/\\]+)$') or path
+local function auth_header()
+    local h = player_auth_header()
+    if h then return h end
+    local token = opts.api_token ~= '' and opts.api_token or nil
+    if not token then
+        local tl = mp.get_property_native('track-list') or {}
+        for _, t in ipairs(tl) do
+            local u = t['external-filename'] or ''
+            token = token or u:match('[?&][Aa]pi_?[Kk]ey=(%w+)')
+        end
+        local path = mp.get_property('path') or ''
+        token = token or path:match('[?&][Aa]pi_?[Kk]ey=(%w+)')
+    end
+    if not token then return nil end
+    return 'Authorization: MediaBrowser Client="subedit", Device="mpv", DeviceId="subedit", Version="1", Token="' .. token .. '"'
+end
+
+-- curl wrapper; cb(body|nil, http_status|nil)
+local function http(method, url, header, body, cb)
+    local args = {'curl', '-sL', '--max-time', '40', '-o', '-', '-w', '\n%{http_code}', '-X', method}
+    if header then table.insert(args, '-H'); table.insert(args, header) end
+    if body then
+        table.insert(args, '-H'); table.insert(args, 'Content-Type: application/json')
+        table.insert(args, '--data-binary'); table.insert(args, body)
+    end
+    table.insert(args, url)
+    mp.command_native_async({name = 'subprocess', capture_stdout = true, capture_stderr = true, args = args},
+        function(ok, res)
+            if not ok or not res or res.status ~= 0 then return cb(nil, nil) end
+            local out = res.stdout or ''
+            local code = tonumber(out:match('(%d+)%s*$'))
+            local payload = out:gsub('\n?%d+%s*$', '')
+            cb(payload, code)
+        end)
 end
 
 -- ---------------------------------------------------------------------------
--- SRT parsing (stage 1)
+-- SRT parsing (kept from stage 1)
 
--- "00:12:34,567 --> 00:12:36,000" (SRT) or with '.' separators (VTT-style)
-local TS_PATTERN = '^%s*(%d+):(%d%d):(%d%d)[,%.](%d%d?%d?)%s*%-%->%s*(%d+):(%d%d):(%d%d)[,%.](%d%d?%d?)'
-
-local function parse_timestamps(line)
-    local h1, m1, s1, f1, h2, m2, s2, f2 = line:match(TS_PATTERN)
-    if not h1 then return nil end
-    local function secs(h, m, s, f)
-        return tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(s)
-            + tonumber((f .. '000'):sub(1, 3)) / 1000
-    end
-    return secs(h1, m1, s1, f1), secs(h2, m2, s2, f2)
+local function parse_ts(s)
+    local h, m, sec, ms = s:match('(%d+):(%d+):(%d+)[,.](%d+)')
+    if not h then return nil end
+    return tonumber(h) * 3600 + tonumber(m) * 60 + tonumber(sec) + tonumber(ms) / (10 ^ #ms)
 end
 
-local function fmt_time(t)
-    local ms = math.floor(t * 1000 + 0.5)
-    local h = math.floor(ms / 3600000)
-    local m = math.floor(ms % 3600000 / 60000)
-    local s = math.floor(ms % 60000 / 1000)
-    return string.format('%02d:%02d:%02d,%03d', h, m, s, ms % 1000)
-end
-
--- Returns a list of cues. Line numbers are 1-based positions in the source
--- file: ts_line is the timestamp line, text_line the first text line (what
--- stage 3 will point the editor at), file_idx the cue's own index number if
--- the file has one.
-local function parse_srt(content)
+local function parse_srt(text)
+    text = text:gsub('^\239\187\191', ''):gsub('\r\n', '\n'):gsub('\r', '\n')
     local lines = {}
-    for line in (content .. '\n'):gmatch('(.-)\r?\n') do
-        lines[#lines + 1] = line
-    end
-    local cues = {}
-    local i = 1
-    while i <= #lines do
-        local start, stop = parse_timestamps(lines[i])
-        if start then
-            local text = {}
-            local j = i + 1
-            while j <= #lines and lines[j]:match('%S') do
-                text[#text + 1] = lines[j]
-                j = j + 1
-            end
-            local file_idx
-            if i > 1 then file_idx = lines[i - 1]:match('^%s*(%d+)%s*$') end
-            cues[#cues + 1] = {
-                start = start,
-                stop = stop,
-                text = table.concat(text, ' / '),
-                ts_line = i,
-                text_line = math.min(i + 1, j),
-                file_idx = file_idx and tonumber(file_idx) or nil,
-            }
-            i = j
-        else
+    for l in (text .. '\n'):gmatch('(.-)\n') do table.insert(lines, l) end
+    local cues, i, n = {}, 1, #lines
+    while i <= n do
+        if lines[i]:match('^%s*$') then
             i = i + 1
+        else
+            local j = i
+            while j <= n and not lines[j]:match('^%s*$') do j = j + 1 end
+            local ts_line
+            for k = i, j - 1 do
+                if lines[k]:find('-->', 1, true) then ts_line = k; break end
+            end
+            if ts_line then
+                local a, b = lines[ts_line]:match('^%s*(.-)%s*%-%->%s*(.-)%s*$')
+                local st, en = parse_ts(a or ''), parse_ts(b or '')
+                if st and en then
+                    local txt = {}
+                    for k = ts_line + 1, j - 1 do table.insert(txt, lines[k]) end
+                    table.insert(cues, {start = st, stop = en, text = table.concat(txt, '\n'),
+                                        ts_line = ts_line, text_line = ts_line + 1,
+                                        file_idx = tonumber(lines[i]:match('^%s*(%d+)%s*$'))})
+                end
+            end
+            i = j
         end
     end
     return cues
 end
 
--- Index of the cue containing t, else the closest one by start/stop distance.
 local function nearest(cues, t)
     if #cues == 0 then return nil end
     local lo, hi = 1, #cues
@@ -132,310 +171,309 @@ local function nearest(cues, t)
         local mid = math.ceil((lo + hi) / 2)
         if cues[mid].start <= t then lo = mid else hi = mid - 1 end
     end
-    if cues[lo].start > t then return 1 end          -- t is before the first cue
-    if t <= cues[lo].stop then return lo end          -- inside cue lo
-    if lo < #cues and (cues[lo + 1].start - t) < (t - cues[lo].stop) then
-        return lo + 1
-    end
+    if cues[lo].start > t then return 1 end
+    if t <= cues[lo].stop then return lo end
+    if lo < #cues and (cues[lo + 1].start - t) < (t - cues[lo].stop) then return lo + 1 end
     return lo
 end
 
+local function cues_to_srt(cues)
+    local out = {}
+    for i, c in ipairs(cues) do
+        out[#out + 1] = string.format('%d\n%s --> %s\n%s\n', i, fmt_srt(c.start), fmt_srt(c.stop), c.text)
+    end
+    return table.concat(out, '\n')
+end
+
 -- ---------------------------------------------------------------------------
--- Real-file resolution (stage 2)
+-- step 1: assess
 
--- Jellyfin external-subtitle delivery URL:
---   https://host[:port]/Videos/{item}/{mediasource}/Subtitles/{index}/{start}/Stream.srt?ApiKey=...
-local function parse_stream_url(url)
-    local base, rest = url:match('^(https?://[^/?#]+)(/.*)$')
-    if not base then return nil end
-    local item, msid, index = rest:match('/Videos/([%w%-]+)/(%w+)/Subtitles/(%d+)/%d+/Stream%.%w+')
-    if not item then return nil end
-    local token = url:match('[?&][Aa]pi_?[Kk]ey=(%w+)')
-    return { base = base, item = item, msid = msid, index = tonumber(index), token = token }
+local function current_item()
+    local path = mp.get_property('path') or ''
+    local item = path:match('/Videos/([%w%-]+)/stream') or path:match('/Videos/([%w%-]+)/')
+    local msid = path:match('[?&]MediaSourceId=(%w+)')
+    return item, msid
 end
 
-local function norm_id(s)
-    return (s:lower():gsub('%-', ''))
-end
-
-local function map_path(server_path)
-    for rule in opts.path_map:gmatch('[^,]+') do
-        local from, to = rule:match('^(.-)=(.*)$')
-        if from and from ~= '' and server_path:sub(1, #from) == from then
-            return to .. server_path:sub(#from + 1)
-        end
+local function selected_sub_track()
+    local tl = mp.get_property_native('track-list') or {}
+    for _, t in ipairs(tl) do
+        if t.type == 'sub' and t.selected then return t end
     end
     return nil
 end
 
-local function sh_quote(s)
-    return "'" .. s:gsub("'", "'\\''") .. "'"
-end
+local KIND_LABEL = {
+    external_srt = 'external .srt (edits go into the file itself)',
+    external_other = 'external non-srt (edits create a new .srt sidecar)',
+    embedded_text = 'embedded text track (edits create a new .srt sidecar)',
+    image = 'image-based (not editable)',
+}
 
-local function http_get(url, cb)
-    mp.command_native_async({
-        name = 'subprocess',
-        capture_stdout = true,
-        capture_stderr = true,
-        args = {'curl', '-sfL', '--max-time', '10', url},
-    }, function(ok, res)
-        if not ok or not res or res.status ~= 0 then return cb(nil) end
-        cb(res.stdout)
-    end)
-end
-
--- cb('WRITABLE'|'READONLY'|'MISSING'|'ssh failed (...)')
-local function probe_remote(path, cb)
-    local remote = 'p=' .. sh_quote(path)
-        .. '; if test -w "$p"; then echo WRITABLE;'
-        .. ' elif test -e "$p"; then echo READONLY;'
-        .. ' else echo MISSING; fi'
-    mp.command_native_async({
-        name = 'subprocess',
-        capture_stdout = true,
-        capture_stderr = true,
-        args = {
-            'timeout', tostring(opts.ssh_timeout),
-            'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
-            '-o', 'ControlMaster=auto', '-o', 'ControlPath=/tmp/subedit-ssh-%C',
-            '-o', 'ControlPersist=600',
-            opts.ssh_target, remote,
-        },
-    }, function(ok, res)
-        local out = ok and res and res.status == 0 and (res.stdout or ''):match('%u+')
-        if out then return cb(out) end
-        cb(string.format('ssh failed (exit %s)', res and res.status or '?'))
-    end)
-end
-
-local function host_label()
-    return opts.ssh_target:match('@(.+)$') or opts.ssh_target
-end
-
-local function resolve_target(source, cb)
-    if resolve_cache[source] then return cb(resolve_cache[source]) end
-    local function done(t)
-        resolve_cache[source] = t
-        cb(t)
+-- picks the stream to edit: the one mpv has selected (matched by index in its
+-- url), else the first editable one. Returns sub, label.
+local function choose_stream(assess, track)
+    local want = nil
+    if track and track['external-filename'] then
+        want = tonumber((track['external-filename']):match('/Subtitles/(%d+)/'))
     end
-    if not is_url(source) then
-        local w = io.open(source, 'r+')
-        if w then
-            w:close()
-            return done({editable = true, kind = 'local', path = source,
-                         desc = 'editable (local): ' .. source})
+    local pick
+    if want then
+        for _, s in ipairs(assess.subs) do if s.index == want then pick = s end end
+    end
+    if not pick then
+        for _, s in ipairs(assess.subs) do if s.editable ~= 'none' then pick = s; break end end
+    end
+    if not pick and #assess.subs > 0 then pick = assess.subs[1] end
+    return pick
+end
+
+local function describe(assess, sub)
+    if not sub then
+        return 'no subtitle streams on this item - nothing to edit'
+    end
+    local where = sub.path and (' - ' .. sub.path:match('[^/]+$')) or ''
+    local flag = ''
+    if sub.editable == 'in_place' then
+        flag = sub.writable and '' or ' [file NOT writable]'
+    elseif sub.editable == 'sidecar' then
+        flag = assess.video_dir_writable and (' -> ' .. (assess.new_sidecar or ''):match('[^/]+$')) or ' [dir NOT writable]'
+    end
+    return string.format('stream %d %s: %s%s%s', sub.index, sub.codec or '?', KIND_LABEL[sub.kind] or sub.kind, where, flag)
+end
+
+local function assess(cb)
+    local item, msid = current_item()
+    local path = mp.get_property('path') or ''
+    if not item then
+        if not is_url(path) then
+            return cb({local_file = true, path = path})
         end
-        local r = io.open(source, 'r')
-        if r then
-            r:close()
-            return done({editable = false, desc = 'view only (local file not writable)'})
+        return cb(nil, 'not a Jellyfin item (cannot parse item id from ' .. path:sub(1, 60) .. ')')
+    end
+    local header = auth_header()
+    if not header then return cb(nil, 'no Jellyfin auth available (no player header, no token in url)') end
+    local url = string.format('%s/state?item=%s%s&lang=%s', opts.apply_url, item, msid and ('&msid=' .. msid) or '', opts.lang)
+    http('GET', url, header, nil, function(body, code)
+        local data = body and utils.parse_json(body)
+        if code ~= 200 or not data or not data.subs then
+            return cb(nil, string.format('assess failed (HTTP %s%s)', tostring(code), data and data.detail and (': ' .. data.detail) or ''))
         end
-        return done({editable = false, desc = 'view only (local file unreadable)'})
-    end
-    local p = parse_stream_url(source)
-    if not p then
-        return done({editable = false, desc = 'view only (unrecognized stream url)'})
-    end
-    local token = opts.api_token ~= '' and opts.api_token or p.token
-    if not token then
-        return done({editable = false,
-                     desc = 'view only (no token in url; set api_token in script-opts)'})
-    end
-    http_get(p.base .. '/Items/' .. p.item .. '/PlaybackInfo?api_key=' .. token,
-        function(body)
-            local data = body and utils.parse_json(body)
-            if not data or not data.MediaSources then
-                return done({editable = false, desc = 'view only (api request failed)'})
-            end
-            local server_path
-            for _, ms in ipairs(data.MediaSources) do
-                if norm_id(ms.Id or '') == norm_id(p.msid) then
-                    for _, st in ipairs(ms.MediaStreams or {}) do
-                        if st.Type == 'Subtitle' and st.Index == p.index then
-                            server_path = st.Path
-                        end
-                    end
-                end
-            end
-            if not server_path then
-                return done({editable = false,
-                             desc = 'view only (no Path in api response; token may lack admin)'})
-            end
-            local host_path = map_path(server_path)
-            if not host_path then
-                return done({editable = false,
-                             desc = 'view only (no path mapping for ' .. server_path .. ')'})
-            end
-            probe_remote(host_path, function(status)
-                if status == 'WRITABLE' then
-                    done({editable = true, kind = 'remote', path = host_path,
-                          ssh = opts.ssh_target,
-                          desc = 'editable on ' .. host_label() .. ': ' .. host_path})
-                elseif status == 'READONLY' or status == 'MISSING' then
-                    done({editable = false,
-                          desc = 'view only (file ' .. status:lower() .. ' on ' .. host_label() .. ')'})
-                else
-                    done({editable = false, desc = 'view only (' .. status .. ')'})
-                end
-            end)
-        end)
+        data.item, data.msid = item, data.msid or msid
+        data.header = header
+        cb(data)
+    end)
 end
 
 -- ---------------------------------------------------------------------------
--- Menu
+-- step 2: fetch + place
 
-local function build_menu(cues, t, selected)
+local function fetch_text(assess, sub, cb)
+    if assess.local_file then
+        local f = io.open(sub.path, 'r')
+        if not f then return cb(nil, 'cannot read ' .. sub.path) end
+        local t = f:read('*a'); f:close()
+        return cb(t)
+    end
+    if sub.editable == 'in_place' then
+        local url = string.format('%s/srt?item=%s&msid=%s&index=%d', opts.apply_url, assess.item, assess.msid or '', sub.index)
+        return http('GET', url, assess.header, nil, function(body, code)
+            if code == 200 and body then return cb(body) end
+            cb(nil, 'could not fetch the sidecar from the server (HTTP ' .. tostring(code) .. ')')
+        end)
+    end
+    -- embedded / other format: Jellyfin converts it to srt for us
+    local base = (mp.get_property('path') or ''):match('^(https?://[^/]+)')
+    local url = string.format('%s/Videos/%s/%s/Subtitles/%d/0/Stream.srt', base, assess.item, assess.msid, sub.index)
+    http('GET', url, assess.header, nil, function(body, code)
+        if code == 200 and body then return cb(body) end
+        cb(nil, 'Jellyfin would not convert this track to srt (HTTP ' .. tostring(code) .. ')')
+    end)
+end
+
+local function build_menu(cues, sel, title, footnote)
     local items = {}
     for i, c in ipairs(cues) do
         items[i] = {
-            title = c.text ~= '' and c.text or '(empty cue)',
-            hint = fmt_time(c.start),
-            active = t >= c.start and t <= c.stop,
+            title = c.text:gsub('\n', ' '),
+            hint = fmt_srt(c.start):sub(1, 8),
+            value = {'script-message-to', 'subedit', 'subedit-edit', tostring(i)},
             keep_open = true,
-            value = {'script-message-to', SCRIPT, 'subedit-activate', tostring(i)},
         }
     end
     return {
-        type = 'subedit',
-        title = state.track_title or basename(state.source or 'subtitles'),
-        footnote = state.footnote or '',
-        items = items,
-        selected_index = selected,
-        on_close = {'script-message-to', SCRIPT, 'subedit-closed'},
+        type = 'subedit', title = title, items = items, selected_index = sel,
+        footnote = footnote, search_style = 'on_demand', on_close = {'script-message-to', 'subedit', 'subedit-closed'},
     }
 end
 
-local function with_content(source, cb)
-    if not is_url(source) then
-        local f = io.open(source, 'rb')
-        if not f then return osd('cannot read ' .. source) end
-        local content = f:read('*all')
-        f:close()
-        return cb(content)
+local function open_menu(reselect)
+    local cues = state.cues
+    local t = (mp.get_property_number('time-pos') or 0) - (mp.get_property_number('sub-delay') or 0)
+    local sel = reselect or nearest(cues, t) or 1
+    local title = state.sub and (state.assess.local_file and 'Local subtitle' or describe(state.assess, state.sub)) or 'Subtitles'
+    local foot = state.sub and (state.sub.editable == 'none' and 'view only' or 'Enter = edit this cue, Esc = close') or ''
+    mp.commandv('script-message-to', 'uosc', 'open-menu', utils.format_json(build_menu(cues, sel, title, foot)))
+    state.menu_open = true
+end
+
+-- ---------------------------------------------------------------------------
+-- step 3: submit
+
+local function reload_track(new_index)
+    if new_index then
+        local base = (mp.get_property('path') or ''):match('^(https?://[^/]+)')
+        local url = string.format('%s/Videos/%s/%s/Subtitles/%d/0/Stream.srt', base, state.assess.item, state.assess.msid, new_index)
+        mp.commandv('sub-add', url, 'select', 'subedit ' .. opts.lang)
+    else
+        mp.commandv('sub-reload')
     end
-    if url_cache[source] then return cb(url_cache[source]) end
-    osd('fetching subtitles...')
-    mp.command_native_async({
-        name = 'subprocess',
-        capture_stdout = true,
-        capture_stderr = true,
-        args = {'curl', '-sfL', '--max-time', '10', source},
-    }, function(ok, res)
-        if not ok or not res or res.status ~= 0 or not res.stdout or res.stdout == '' then
-            local detail = res and res.stderr or ''
-            return osd('fetch failed ' .. detail)
+end
+
+local function submit(i, new_text)
+    local c = state.cues[i]
+    local sub, assess = state.sub, state.assess
+    if assess.local_file then
+        c.text = new_text
+        local f = io.open(sub.path, 'w')
+        if not f then return osd('could not write ' .. sub.path) end
+        f:write(cues_to_srt(state.cues)); f:close()
+        mp.commandv('sub-reload')
+        return osd('saved cue ' .. i .. ' to ' .. sub.path:match('[^/]+$'))
+    end
+    local mode = sub.editable == 'in_place' and 'in_place' or 'sidecar'
+    local body = {
+        item = assess.item, msid = assess.msid, index = sub.index, mode = mode, lang = opts.lang,
+        cue = {n = i, start = fmt_srt(c.start), stop = fmt_srt(c.stop), old_text = c.text, new_text = new_text},
+    }
+    if mode == 'sidecar' then
+        local old = c.text
+        c.text = new_text
+        body.full_srt = cues_to_srt(state.cues)
+        c.text = old
+    end
+    osd('submitting cue ' .. i .. ' (' .. mode .. ')...', 30)
+    http('POST', opts.apply_url .. '/apply', assess.header, utils.format_json(body), function(resp, code)
+        local d = resp and utils.parse_json(resp) or {}
+        local outcome = d.outcome or ('no response (HTTP ' .. tostring(code) .. ')')
+        if outcome == 'replaced_in_place' then
+            c.text = new_text
+            reload_track(nil)
+            osd(string.format('saved cue %d in place%s', i, d.backup and ' (backup: .bak)' or ''), 5)
+        elseif outcome == 'sidecar_created' then
+            c.text = new_text
+            sub.editable = 'in_place'; sub.kind = 'external_srt'; sub.path = d.path
+            if d.new_index then sub.index = d.new_index end
+            reload_track(d.new_index)
+            osd(string.format('created sidecar %s%s', (d.path or ''):match('[^/]+$'), d.new_index and ' and switched to it' or (' (' .. tostring(d.note) .. ')')), 7)
+        elseif outcome == 'conflict' then
+            osd('NOT saved: ' .. tostring(d.detail) .. ' - reopen to refetch', 8)
+        else
+            osd('NOT saved: ' .. outcome .. (d.detail and (': ' .. d.detail) or ''), 8)
         end
-        url_cache[source] = res.stdout
-        cb(res.stdout)
+        if state.menu_open then open_menu(i) end
     end)
 end
 
-local function current_sub_time()
-    return (mp.get_property_number('time-pos') or 0)
-        - (mp.get_property_number('sub-delay') or 0)
+local function edit_cue(i)
+    local c = state.cues[i]
+    if not c then return end
+    if not state.sub or state.sub.editable == 'none' then
+        return osd('this subtitle is not editable (' .. (state.sub and state.sub.kind or 'none') .. ')')
+    end
+    if not input_ok then return osd('mpv input console not available (need mpv >= 0.38)') end
+    -- hide the menu while the console is up, keep our state
+    mp.commandv('script-message-to', 'uosc', 'close-menu', 'subedit')
+    state.editing = true
+    local shown = c.text:gsub('\n', ' \\n ')
+    input.get({
+        prompt = string.format('cue %d  %s -> %s :', i, fmt_srt(c.start):sub(1, 8), fmt_srt(c.stop):sub(1, 8)),
+        default_text = shown,
+        cursor_position = #shown + 1,
+        submit = function(text)
+            input.terminate()
+            state.editing = false
+            local new_text = text:gsub('%s*\\n%s*', '\n'):gsub('^%s+', ''):gsub('%s+$', '')
+            if new_text == c.text then
+                osd('unchanged, nothing sent')
+                return open_menu(i)
+            end
+            if new_text == '' then
+                osd('empty text, nothing sent')
+                return open_menu(i)
+            end
+            submit(i, new_text)
+        end,
+        closed = function()
+            if state.editing then
+                state.editing = false
+                osd('edit cancelled, nothing sent')
+                open_menu(i)
+            end
+        end,
+    })
 end
 
-local function open_menu()
+-- ---------------------------------------------------------------------------
+-- entry
+
+local function start()
     if state.menu_open then
         mp.commandv('script-message-to', 'uosc', 'close-menu', 'subedit')
+        state.menu_open = false
         return
     end
-    local track = mp.get_property_native('current-tracks/sub')
-    if not track then return osd('no subtitle track selected') end
-    if not track.external then
-        return osd('embedded subtitles not supported (external srt only)')
-    end
-    local source = track['external-filename']
-    if not source then return osd('track has no external filename') end
-    with_content(source, function(content)
-        content = strip_bom(content)
-        if content:sub(1, 13) == '[Script Info]' then
-            return osd('ASS subtitles not supported (srt only)')
+    local track = selected_sub_track()
+    osd('assessing subtitles...', 10)
+    assess(function(a, err)
+        if not a then return osd(err) end
+        state.assess = a
+        local sub
+        if a.local_file then
+            local ext = track and track['external-filename']
+            if not ext then return osd('local file: no external subtitle selected') end
+            sub = {index = track.id, path = ext, editable = 'in_place', kind = 'external_srt', codec = 'srt'}
+        else
+            sub = choose_stream(a, track)
         end
-        local cues = parse_srt(content)
-        if #cues == 0 then return osd('no cues parsed from ' .. basename(source)) end
-        state.cues = cues
-        state.source = source
-        state.track_title = track.title
-        local cached = resolve_cache[source]
-        state.edit_target = cached
-        state.footnote = cached and cached.desc or 'checking file access...'
-        local t = current_sub_time()
-        local sel = nearest(cues, t)
-        mp.commandv('script-message-to', 'uosc', 'open-menu',
-            utils.format_json(build_menu(cues, t, sel)))
-        state.menu_open = true
-        if not cached then
-            resolve_target(source, function(target)
-                state.edit_target = target
-                state.footnote = target.desc
-                msg.info('resolved: ' .. target.desc)
-                if state.menu_open and state.source == source then
-                    local t2 = current_sub_time()
-                    mp.commandv('script-message-to', 'uosc', 'update-menu',
-                        utils.format_json(build_menu(cues, t2, nearest(cues, t2))))
-                end
-            end)
+        state.sub = sub
+        osd(describe(a, sub), 6)
+        if not sub then return end
+        if sub.editable == 'none' and not (track and track['external-filename']) then
+            return osd('view only: ' .. describe(a, sub), 6)
         end
+        fetch_text(a, sub, function(text, ferr)
+            if not text then return osd(ferr, 8) end
+            local cues = parse_srt(text)
+            if #cues == 0 then return osd('no cues parsed from the subtitle', 6) end
+            state.cues = cues
+            state.source = sub.path or sub.index
+            open_menu()
+        end)
     end)
 end
 
-mp.register_script_message('subedit-activate', function(i)
-    local c = state.cues and state.cues[tonumber(i)]
-    if not c then return end
-    local delay = mp.get_property_number('sub-delay') or 0
-    mp.commandv('seek', tostring(c.start + delay + 0.001), 'absolute+exact')
-    -- refresh active highlight for the new position, keep selection on the cue
-    local menu = build_menu(state.cues, c.start + 0.001, tonumber(i))
-    mp.commandv('script-message-to', 'uosc', 'update-menu', utils.format_json(menu))
-end)
-
+mp.register_script_message('subedit-edit', function(i) edit_cue(tonumber(i)) end)
 mp.register_script_message('subedit-closed', function()
-    state.menu_open = false
+    if not state.editing then state.menu_open = false end
 end)
-
+mp.add_key_binding(nil, 'subedit-open', start)
 mp.register_event('end-file', function()
-    url_cache = {}
-    resolve_cache = {}
-    state.cues = nil
-    state.edit_target = nil
-    state.menu_open = false
+    state.cues, state.assess, state.sub, state.menu_open = nil, nil, nil, false
 end)
 
 -- ---------------------------------------------------------------------------
--- Offline self-tests (no network, no uosc):
---   SUBEDIT_SELFTEST=<file.srt> [SUBEDIT_T=<secs>] mpv --no-config --idle=once --script=subedit.lua
---   SUBEDIT_SELFTEST_URL=<url> [SUBEDIT_SELFTEST_PATH=<serverpath>] mpv --no-config --idle=once --script=subedit.lua
+-- self-test (parser + nearest), no network
 local selftest = os.getenv('SUBEDIT_SELFTEST')
-local selftest_url = os.getenv('SUBEDIT_SELFTEST_URL')
-if selftest or selftest_url then
-    if selftest then
-        local f = assert(io.open(selftest, 'rb'))
-        local content = strip_bom(f:read('*all'))
-        f:close()
-        local cues = parse_srt(content)
-        print('cues: ' .. #cues)
-        for k, c in ipairs(cues) do
-            print(string.format('%d\t%s --> %s\tts_line=%d text_line=%d idx=%s\t%s',
-                k, fmt_time(c.start), fmt_time(c.stop), c.ts_line, c.text_line,
-                tostring(c.file_idx), c.text))
-        end
-        local t = tonumber(os.getenv('SUBEDIT_T') or '0')
-        print(string.format('nearest to %.3f: cue %s', t, tostring(nearest(cues, t))))
-    end
-    if selftest_url then
-        local p = parse_stream_url(selftest_url)
-        if p then
-            print(string.format('base=%s item=%s msid=%s index=%d token=%s',
-                p.base, p.item, p.msid, p.index, tostring(p.token)))
-        else
-            print('url parse failed')
-        end
-        local sp = os.getenv('SUBEDIT_SELFTEST_PATH')
-        if sp then print('mapped: ' .. tostring(map_path(sp))) end
-    end
+if selftest then
+    local f = io.open(selftest, 'r')
+    local text = f and f:read('*a') or ''
+    if f then f:close() end
+    local cues = parse_srt(text)
+    print('cues: ' .. #cues)
+    local t = tonumber(os.getenv('SUBEDIT_T') or '0')
+    local n = nearest(cues, t)
+    print(string.format('nearest to %.3f: cue %s%s', t, tostring(n), n and (' "' .. cues[n].text:gsub('\n', ' | ') .. '"') or ''))
+    print('roundtrip ok: ' .. tostring(#parse_srt(cues_to_srt(cues)) == #cues))
     mp.command('quit')
-    return
 end
-
-mp.add_key_binding(nil, 'subedit-open', open_menu)

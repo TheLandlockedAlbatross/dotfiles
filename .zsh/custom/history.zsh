@@ -11,10 +11,11 @@
 #       local:  use ./.zsh_history if it exists and cwd != HOME, else ~/.zsh_history
 #       global: always ~/.zsh_history
 #
-# `h help` lists the h subcommands (swap/back to a directory's HISTFILE without writing to any
-# history file, remove to delete entries, file for status; each has a single-letter alias);
-# `hh` switches HISTFILE for real. Ctrl+R fzf-searches the same merged shell-tagged view
-# (zsh-only in shell mode), read-only: picking an entry just puts it on the command line.
+# `h help` lists the h subcommands (swap/back: read-only switch to the history files found in a
+# directory, remove to delete entries, file for status; each has a single-letter alias);
+# `hh` creates local history files for every installed shell and switches HISTFILE for real.
+# Ctrl+R fzf-searches the same merged shell-tagged view (zsh-only in shell mode), read-only:
+# picking an entry just puts it on the command line.
 ####################################################################################################
 
 # Shared HISTFILE settings, applied at startup and by hh when switching HISTFILE
@@ -37,25 +38,52 @@ _hist_apply_settings() {
     setopt APPEND_HISTORY
 }
 
-# If custom ~/.zsh_history in current folder respect it (unless scoped global)
-if [[ "${HISTORY_SCOPE_ZSH:-${HISTORY_SCOPE:-local}}" == "local" && -f "$(pwd)/.zsh_history" && "$(pwd)" != "${HOME}" ]]; then
-    HISTFILE="$(pwd)/.zsh_history"
-else
-    HISTFILE="$HOME/.zsh_history"
-fi
+# Where a shell's history file lives right now, ignoring swaps and pins: ./.<shell>_history if
+# scope is local, it exists and cwd != HOME, else the shell's global file (hist-merge's own rule)
+_h_shells=(zsh bash fish)
+_h_resolve() {
+    local sh="${1}" scope_var="HISTORY_SCOPE_${(U)1}" global="${HOME}/.${1}_history"
+    [[ "${sh}" == "fish" ]] && global="${HOME}/.local/share/fish/fish_history"
+    if [[ "${(P)scope_var:-${HISTORY_SCOPE:-local}}" == "local" && -f "${PWD}/.${sh}_history" && "${PWD}" != "${HOME}" ]]; then
+        echo "${PWD}/.${sh}_history"
+    else
+        echo "${global}"
+    fi
+}
+
+# If custom .zsh_history in current folder respect it (unless scoped global)
+HISTFILE="$(_h_resolve zsh)"
 _hist_apply_settings
 
-# Files the merged view (and h rm) should look at: zsh's is the live HISTFILE so h swap/hh are
-# reflected; bash/fish mirror hist-merge's own env-var resolution. Fills the _h_specs array.
+# Files the merged view (and h rm, h file, Ctrl+R) look at, per shell; first match wins:
+#   1. _h_swap_over  temporary override pushed by h swap, popped by h back
+#   2. _h_pin        persistent override set by hh for the other shells' new local files
+#   3. this shell's live HISTFILE (h swap's fc -p and hh both move it)
+#   4. _h_resolve    cwd/scope resolution
+# Fills the _h_specs array. _h_swap_stack holds one record per active swap: first line 1 if the
+# swap pushed this shell's own history (fc -p), the rest a snapshot of _h_swap_over before it;
+# _h_swap_pushed counts the records that did.
+typeset -gA _h_swap_over _h_pin
+typeset -ga _h_swap_stack
 _h_merge_specs() {
-    local bscope="${HISTORY_SCOPE_BASH:-${HISTORY_SCOPE:-local}}"
-    local bfile="${HOME}/.bash_history"
-    [[ "${bscope}" == "local" && -f "${PWD}/.bash_history" && "${PWD}" != "${HOME}" ]] && bfile="${PWD}/.bash_history"
-    _h_specs=("zsh:${HISTFILE:-${HOME}/.zsh_history}" "bash:${bfile}" "fish:${HOME}/.local/share/fish/fish_history")
+    local sh path
+    _h_specs=()
+    for sh in "${_h_shells[@]}"; do
+        if [[ -n "${_h_swap_over[${sh}]:-}" ]]; then
+            path="${_h_swap_over[${sh}]}"
+        elif [[ -n "${_h_pin[${sh}]:-}" ]]; then
+            path="${_h_pin[${sh}]}"
+        elif [[ "${sh}" == "zsh" ]]; then
+            path="${HISTFILE:-${HOME}/.zsh_history}"
+        else
+            path="$(_h_resolve "${sh}")"
+        fi
+        _h_specs+=("${sh}:${path}")
+    done
 }
 
 # h file (and the tail of h help): the current history file of each shell, as the merged view
-# resolves them, with swap status for this shell and a flag for files that don't exist yet
+# resolves them, with swap/pin status and a flag for files that don't exist yet
 _h_files() {
     local -a _h_specs
     _h_merge_specs
@@ -64,39 +92,106 @@ _h_files() {
         sh="${spec%%:*}"
         path="${spec#*:}"
         note=""
-        if [[ "${sh}" == "zsh" ]]; then
-            note="this shell"
-            (( ${_h_swap_depth:-0} > 0 )) && note+="; swapped read-only, depth ${_h_swap_depth}: 'h back' returns"
+        [[ "${sh}" == "zsh" ]] && note="this shell"
+        if [[ -n "${_h_swap_over[${sh}]:-}" || ( "${sh}" == "zsh" && ${_h_swap_pushed:-0} -gt 0 ) ]]; then
+            note+="${note:+; }swapped read-only: 'h back' returns"
+        elif [[ -n "${_h_pin[${sh}]:-}" ]]; then
+            note+="${note:+; }pinned by hh"
         fi
         [[ -f "${path}" ]] || note+="${note:+; }missing"
         printf '    %-5s %s%s\n' "${sh}:" "${path}" "${note:+ (${note})}"
     done
+    (( ${#_h_swap_stack} > 0 )) && echo "    (${#_h_swap_stack} swap(s) active)"
+    return 0
 }
 
-# h swap/back: read-only HISTFILE switch. fc -p pushes the current history list onto zsh's
-# history stack and loads the target with SAVEHIST=0, so nothing is written to any history file
-# while swapped (not even by SHARE_HISTORY); fc -P restores the previous list untouched.
-_h_swap() {
-    local target="${1:-${PWD}/.zsh_history}"
-    if [[ ! -f "${target}" ]]; then
-        echo "h swap: no history file at ${target} (hh creates a real local HISTFILE)"
+# h swap/back: read-only switch of the history files h looks at. Arguments: none (every history
+# file in cwd), directories (every history file there), files (shell inferred from the name) or
+# explicit shell:path specs. This shell's own file is loaded with fc -p, which pushes the current
+# history list onto zsh's history stack and loads the target with SAVEHIST=0, so nothing is
+# written to any history file while swapped (not even by SHARE_HISTORY); fc -P restores the
+# previous list untouched. The other shells' files only change the merged view. Ignores
+# HISTORY_SCOPE: an explicit swap wins.
+_h_swap_targets() {   # fills the caller's _h_want assoc (shell -> absolute path) from swap args
+    local arg sh path dir
+    for arg in "${@:-${PWD}}"; do
+        if [[ -d "${arg}" ]]; then
+            dir="${arg:a}"
+            for sh in "${_h_shells[@]}"; do
+                [[ -f "${dir}/.${sh}_history" ]] && _h_want[${sh}]="${dir}/.${sh}_history"
+            done
+            continue
+        fi
+        if [[ "${arg}" == (zsh|bash|fish):* ]]; then
+            sh="${arg%%:*}"
+            path="${arg#*:}"
+        else
+            path="${arg}"
+            case "${path:t}" in
+                *zsh_history*)  sh=zsh ;;
+                *bash_history*) sh=bash ;;
+                *fish_history*) sh=fish ;;
+                *)
+                    echo "h swap: cannot tell which shell owns ${path}; use a zsh:/bash:/fish: prefix"
+                    return 1 ;;
+            esac
+        fi
+        if [[ ! -f "${path}" ]]; then
+            echo "h swap: no history file at ${path} (hh creates real local history files)"
+            return 1
+        fi
+        _h_want[${sh}]="${path:a}"
+    done
+    if (( ${#_h_want} == 0 )); then
+        echo "h swap: no .zsh_history/.bash_history/.fish_history in ${*:-${PWD}}"
         return 1
     fi
-    fc -p "${target}" "${HISTSIZE}" 0
-    _h_swap_depth=$(( ${_h_swap_depth:-0} + 1 ))
-    echo "Swapped to ${target} (read-only: commands typed now are saved nowhere). 'h back' returns."
+    return 0
+}
+
+_h_swap() {
+    local -A _h_want
+    _h_swap_targets "$@" || return 1
+    local record="0" sh
+    for sh in "${(@k)_h_swap_over}"; do
+        record+=$'\n'"${sh}"$'\t'"${_h_swap_over[${sh}]}"
+    done
+    for sh in "${_h_shells[@]}"; do
+        [[ -n "${_h_want[${sh}]:-}" ]] || continue
+        if [[ "${sh}" == "zsh" ]]; then
+            fc -p "${_h_want[zsh]}" "${HISTSIZE}" 0
+            record="1${record#0}"
+            _h_swap_pushed=$(( ${_h_swap_pushed:-0} + 1 ))
+        else
+            _h_swap_over[${sh}]="${_h_want[${sh}]}"
+        fi
+    done
+    _h_swap_stack+=("${record}")
+    echo "Swapped (read-only: commands typed now are saved nowhere; 'h back' returns):"
+    _h_files
 }
 
 _h_back() {
-    if (( ${_h_swap_depth:-0} == 0 )); then
+    if (( ${#_h_swap_stack} == 0 )); then
         echo "h back: no swap active"
         return 1
     fi
-    fc -P
-    _h_swap_depth=$(( _h_swap_depth - 1 ))
-    local extra=""
-    (( _h_swap_depth > 0 )) && extra=" (still ${_h_swap_depth} swap(s) deep)"
-    echo "Back on ${HISTFILE}${extra}"
+    local record="${_h_swap_stack[-1]}"
+    _h_swap_stack[-1]=()
+    local -a lines
+    lines=("${(@f)record}")
+    if [[ "${lines[1]}" == "1" ]]; then
+        fc -P
+        _h_swap_pushed=$(( _h_swap_pushed - 1 ))
+    fi
+    _h_swap_over=()
+    local line
+    for line in "${lines[@]:1}"; do
+        [[ -n "${line}" ]] || continue
+        _h_swap_over[${line%%$'\t'*}]="${line#*$'\t'}"
+    done
+    echo "Back:"
+    _h_files
 }
 
 # h remove: delete history entries, addressed by the numbers h displays. Edits the history files
@@ -201,10 +296,11 @@ USAGE:
     h [number] .             run that history entry
     h [number] b             run that history entry in background
     h r|remove <n> [<n>...]  delete entries (numbers as shown by h) from their history files
-    h s|swap [file]          switch to ./.zsh_history (or file), read-only: nothing is
-                             written to any history file until you swap back
+    h s|swap [target ...]    switch to every history file found in cwd (or in the given
+                             directories / the given files), read-only: nothing is written
+                             to any history file until you swap back
     h b|back                 undo the last swap (commands typed while swapped are discarded)
-    h f|file                 list each shell's current history file (and swap status)
+    h f|file                 list each shell's current history file (and swap/pin status)
     h h|help | -h | --help   show this help message
 
 Mode (HISTORY_MODE_ZSH, then HISTORY_MODE; default agnostic):
@@ -213,7 +309,9 @@ agnostic = read-only merged view across zsh/bash/fish via hist-merge; shell = zs
 Notes:
     Delete several entries in one h remove call: the numbers shift after a deletion.
     h remove edits the files only; running shells may keep deleted entries in memory.
-    h swap is the read-only counterpart of hh (which switches HISTFILE for real).
+    h swap is the read-only counterpart of hh (which creates local history files for every
+    installed shell and switches HISTFILE for real). Swap targets: .zsh_history,
+    .bash_history, .fish_history in a directory, or files named like that, or shell:path.
     The subcommand words and letters are reserved; to search one literally: h '(swap)'
 
 Current history files:
@@ -226,7 +324,7 @@ EOF
     case "${1}" in
         h|help|-h|--help) usage; return 0 ;;
         r|rm|remove) shift; _h_rm "$@"; return $? ;;
-        s|swap)      _h_swap "${2}"; return $? ;;
+        s|swap)      shift; _h_swap "$@"; return $? ;;
         b|back)      _h_back; return $? ;;
         f|file) _h_files; return 0 ;;
     esac
@@ -266,12 +364,17 @@ EOF
 }
 alias h='h_func '
 
-# quick way to start custom zsh history that has all of current history to start
+# hh: start local history files for every installed shell in cwd, each seeded with that shell's
+# current history, and switch this shell's HISTFILE to its one for real. The other shells' files
+# are pinned for the merged view and picked up by those shells when they start in this directory
+# (HISTORY_SCOPE local). In $HOME: switch back to the global files and drop the pins instead.
 hh_func() {
     usage() {
         cat <<EOF
-Replace current HISTFILE with one in current directory $(pwd)
-Usage: $0 [-y|-h]
+Create ./.<shell>_history for every installed shell (zsh/bash/fish), seeded with that shell's
+current history, and switch this shell's HISTFILE to ./.zsh_history for real. Run in \$HOME to
+switch back to the global files. h swap is the read-only counterpart.
+Usage: hh [-y|-h]
 
 Options:
 -y, --yes\t\tAutomatically continue without prompting
@@ -303,8 +406,25 @@ EOF
         esac
     fi
 
+    if (( ${#_h_swap_stack} > 0 )); then
+        echo "hh: a swap is active; run 'h back' first"
+        return 1
+    fi
+
+    local -a shells
+    local sh
+    for sh in "${_h_shells[@]}"; do
+        (( $+commands[${sh}] )) && shells+=("${sh}")
+    done
+
+    local question
+    if [[ "${PWD}" == "${HOME}" ]]; then
+        question="Switch back to the global history files and drop hh pins?"
+    else
+        question="Create local history files in ${PWD} for ${shells[*]} and switch this shell's HISTFILE to ./.zsh_history?"
+    fi
     if ! ${auto_confirm}; then
-        echo -n "Do you want to replace current HISTFILE with one in current directory? [y/N]: "
+        echo -n "${question} [y/N]: "
         read -r answer
         case "$answer" in
             [yY][eE][sS]|[yY]) ;;
@@ -315,13 +435,43 @@ EOF
         esac
     fi
 
-    local OLD_HISTFILE="${HISTFILE}"
-    HISTFILE="$(pwd)/.zsh_history"
-    if [[ ! -f "${HISTFILE}" && "$(pwd)" != "${HOME}" ]]; then
-        cat "${OLD_HISTFILE}" > "${HISTFILE}"
+    if [[ "${PWD}" == "${HOME}" ]]; then
+        HISTFILE="${HOME}/.zsh_history"
+        _hist_apply_settings
+        _h_pin=()
+        echo "Back on the global history files:"
+        _h_files
+        return 0
     fi
-    _hist_apply_settings
-    echo "Switched HISTFILE to ${HISTFILE} from ${OLD_HISTFILE}"
+
+    local src dst
+    for sh in "${shells[@]}"; do
+        dst="${PWD}/.${sh}_history"
+        if [[ "${sh}" == "zsh" ]]; then
+            src="${HISTFILE}"
+        elif [[ -n "${_h_pin[${sh}]:-}" ]]; then
+            src="${_h_pin[${sh}]}"
+        else
+            src="$(_h_resolve "${sh}")"
+        fi
+        if [[ -f "${dst}" ]]; then
+            echo "    ${sh}: ${dst} exists, kept"
+        elif [[ -f "${src}" ]]; then
+            cp "${src}" "${dst}"
+            echo "    ${sh}: created ${dst} from ${src}"
+        else
+            : > "${dst}"
+            echo "    ${sh}: created empty ${dst} (${src} does not exist)"
+        fi
+        if [[ "${sh}" == "zsh" ]]; then
+            HISTFILE="${dst}"
+            _hist_apply_settings
+        else
+            _h_pin[${sh}]="${dst}"
+        fi
+    done
+    echo "Current history files:"
+    _h_files
 }
 alias hh='hh_func '
 
