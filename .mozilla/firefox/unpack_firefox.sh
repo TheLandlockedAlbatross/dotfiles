@@ -93,13 +93,24 @@ for archive in encrypted_MEO_firefox_profiles.tar.zst encrypted_MEO_firefox_conf
     fi
 done
 
+# A list entry is either a directory name in this folder or the path of a profile kept elsewhere
+# (~/... or /...; the ffx agent profiles live in ~/.local/share/ffx/profiles/<name>). pack_firefox.sh
+# archives an external profile under its basename, so after extraction it is moved to its real place.
+profile_abs() {
+    case "$1" in
+        "~"|"~/"*) printf '%s\n' "${HOME}${1#\~}" ;;
+        /*)        printf '%s\n' "$1" ;;
+        *)         printf '%s\n' "$SCRIPT_DIR/$1" ;;
+    esac
+}
+
 # --- Backup and unpack profiles ---
 echo "Backing up existing profiles..."
 for profile in "${PROFILES[@]}"; do
-    if [[ -d "$SCRIPT_DIR/$profile" ]]; then
-        backup_name="${profile}.bak_${TIMESTAMP}"
-        echo "  $profile -> $backup_name"
-        mv "$SCRIPT_DIR/$profile" "$SCRIPT_DIR/$backup_name"
+    abs="$(profile_abs "$profile")"
+    if [[ -d "$abs" ]]; then
+        echo "  $profile -> $(basename "$abs").bak_${TIMESTAMP}"
+        mv "$abs" "${abs}.bak_${TIMESTAMP}"
     fi
 done
 
@@ -107,6 +118,15 @@ echo "Unpacking profiles..."
 openssl enc -d -aes-256-cbc -pbkdf2 -pass "pass:$AES_KEY" -in "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst" \
     | zstd -d \
     | tar -xf - -C "$SCRIPT_DIR"
+for profile in "${PROFILES[@]}"; do
+    abs="$(profile_abs "$profile")"
+    base="$(basename "$abs")"
+    if [[ "$abs" != "$SCRIPT_DIR/$base" && -d "$SCRIPT_DIR/$base" ]]; then
+        mkdir -p "$(dirname "$abs")"
+        mv "$SCRIPT_DIR/$base" "$abs"
+        echo "  $base -> $profile"
+    fi
+done
 echo "Profiles unpacked."
 
 # --- Backup and unpack config ---

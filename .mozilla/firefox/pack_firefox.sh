@@ -121,15 +121,71 @@ PROFILE_FILES_DATA=(
     "storage-sync-v2.sqlite"
 )
 
+# Agent profiles only (basename agent-*): the logged-in state too. The archive is encrypted twice (openssl with the git-crypt
+# key, then git-crypt), so cookies, saved logins and the session can travel with the repo; the human profiles stay without them.
+# sqlite -wal companions are taken when present (a running or unclean-closed Firefox keeps recent writes there).
+PROFILE_FILES_AGENT=(
+    "cookies.sqlite"
+    "logins.json"
+    "logins.db"
+    "logins-backup.json"
+    "key4.db"
+    "cert9.db"
+    "pkcs11.txt"
+    "formhistory.sqlite"
+    "webappsstore.sqlite"
+    "sessionstore.jsonlz4"
+    "sessionCheckpoints.json"
+)
+PROFILE_DIRS_AGENT=(
+    "sessionstore-backups"
+)
+is_agent_profile() { [[ "$(basename "$1")" == agent-* ]]; }
+
+# Extensions whose storage is a re-downloadable cache, left out of the pack (10ten Japanese Reader: ~420 MB dictionary
+# database per profile, fetched again on first use; its settings live in storage-sync-v2.sqlite, which is packed).
+STORAGE_SKIP_EXT=(
+    "{59812185-ea92-4cca-8ab7-cfcacee81281}"
+)
+# The moz-extension UUIDs (one per line) of STORAGE_SKIP_EXT in this profile, from prefs.js extensions.webextensions.uuids.
+skip_ext_uuids() {
+    python3 - "$1/prefs.js" "${STORAGE_SKIP_EXT[@]}" <<'PY'
+import json, re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    sys.exit(0)
+m = re.search(r'user_pref\("extensions\.webextensions\.uuids", "((?:[^"\\]|\\.)*)"\);', text)
+if not m:
+    sys.exit(0)
+uuids = json.loads(json.loads('"' + m.group(1) + '"'))
+for ext in sys.argv[2:]:
+    if ext in uuids:
+        print(uuids[ext])
+PY
+}
+
 CONFIG_ITEMS=(
     "profiles.ini"
     "installs.ini"
     "Crash Reports"
 )
 
+# A list entry is either a directory name in this folder (the human profiles) or the path of a
+# profile kept elsewhere, written ~/... or /... (the ffx agent profiles live in
+# ~/.local/share/ffx/profiles/<name> so that `firefox -P` never lists them). An external profile
+# is archived under its basename; unpack_firefox.sh moves it back to the listed path.
+profile_abs() {
+    case "$1" in
+        "~"|"~/"*) printf '%s\n' "${HOME}${1#\~}" ;;
+        /*)        printf '%s\n' "$1" ;;
+        *)         printf '%s\n' "$SCRIPT_DIR/$1" ;;
+    esac
+}
+
 # --- Validate profile directories ---
 for profile in "${PROFILES[@]}"; do
-    if [[ ! -d "$SCRIPT_DIR/$profile" ]]; then
+    if [[ ! -d "$(profile_abs "$profile")" ]]; then
         echo "Error: Profile directory not found: $profile"
         exit 1
     fi
@@ -150,31 +206,61 @@ else
     echo "Packing profiles (full — extensions, history, bookmarks)..."
 fi
 tar_args=()
+n_members=0
 for profile in "${PROFILES[@]}"; do
+    abs="$(profile_abs "$profile")"
+    base="$(basename "$abs")"
+    tar_args+=(-C "$(dirname "$abs")")      # each profile is archived as <basename>/... relative to its parent
     for f in "${ALL_FILES[@]}"; do
-        filepath="$profile/$f"
-        if [[ -e "$SCRIPT_DIR/$filepath" ]]; then
-            tar_args+=("$filepath")
+        if [[ -e "$abs/$f" ]]; then
+            tar_args+=("$base/$f"); n_members=$((n_members + 1))
         else
-            echo "  Skipping (not found): $filepath"
+            echo "  Skipping (not found): $profile/$f"
         fi
     done
     for d in "${ALL_DIRS[@]}"; do
-        dirpath="$profile/$d"
-        if [[ -d "$SCRIPT_DIR/$dirpath" ]]; then
-            tar_args+=("$dirpath")
+        if [[ "$d" == storage ]]; then
+            # Only extension storage (userscripts, uBlock settings, ...); website data and Firefox's own caches
+            # rebuild themselves, and STORAGE_SKIP_EXT extensions re-download theirs.
+            skip_uuids="$(skip_ext_uuids "$abs")"
+            for e in "$abs"/storage/default/moz-extension+++*; do
+                [[ -d "$e" ]] || continue
+                uuid="${e##*moz-extension+++}"; uuid="${uuid%%^*}"
+                if [[ -n "$skip_uuids" ]] && grep -qxF "$uuid" <<<"$skip_uuids"; then continue; fi
+                tar_args+=("$base/storage/default/$(basename "$e")"); n_members=$((n_members + 1))
+            done
+            continue
+        fi
+        if [[ -d "$abs/$d" ]]; then
+            tar_args+=("$base/$d"); n_members=$((n_members + 1))
         else
-            echo "  Skipping (not found): $dirpath"
+            echo "  Skipping (not found): $profile/$d"
         fi
     done
+    if [[ "$MINIMAL" == false ]] && is_agent_profile "$abs"; then
+        n_agent=0
+        for f in "${PROFILE_FILES_AGENT[@]}"; do
+            for g in "$f" "$f-wal"; do
+                if [[ -e "$abs/$g" ]]; then
+                    tar_args+=("$base/$g"); n_members=$((n_members + 1)); n_agent=$((n_agent + 1))
+                fi
+            done
+        done
+        for d in "${PROFILE_DIRS_AGENT[@]}"; do
+            if [[ -d "$abs/$d" ]]; then
+                tar_args+=("$base/$d"); n_members=$((n_members + 1)); n_agent=$((n_agent + 1))
+            fi
+        done
+        echo "  $profile: agent profile, logged-in state included ($n_agent items: cookies, logins, session)"
+    fi
 done
 
-if [[ ${#tar_args[@]} -eq 0 ]]; then
+if [[ $n_members -eq 0 ]]; then
     echo "Error: No profile files found to pack."
     exit 1
 fi
 
-tar -cf - -C "$SCRIPT_DIR" "${tar_args[@]}" \
+tar -cf - "${tar_args[@]}" \
     | zstd -10 \
     | openssl enc -aes-256-cbc -pbkdf2 -pass "pass:$AES_KEY" -out "$SCRIPT_DIR/encrypted_MEO_firefox_profiles.tar.zst"
 echo "Created encrypted_MEO_firefox_profiles.tar.zst"
