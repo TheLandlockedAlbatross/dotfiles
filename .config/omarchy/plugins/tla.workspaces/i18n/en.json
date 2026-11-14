@@ -1,0 +1,6 @@
+{
+  "tooltip.workspace": "Workspace %1",
+  "tooltip.borrowedDisconnected": "Workspace %1 is borrowed\nIts own display (%2) is disconnected, so it is shown here.\nIt moves back when that display returns.",
+  "tooltip.borrowedMoved": "Workspace %1 is away from home\nIt belongs on %2 but was moved to this display.",
+  "tooltip.unknownDisplay": "an unknown display"
+}
