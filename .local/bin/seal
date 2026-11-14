@@ -31,9 +31,48 @@ INTERACTIVE=false
 [[ -t 0 && -t 2 ]] && INTERACTIVE=true
 HAVE_GUM=false
 command -v gum &>/dev/null && HAVE_GUM=true
+HAVE_PV=false
+command -v pv &>/dev/null && HAVE_PV=true
 
 die() { printf '%sError:%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
 msg() { local lvl="$1"; shift; (( VERBOSITY >= lvl )) && printf '%s\n' "$*" >&2 || true; }
+
+# The shell trace (-vv) would print the passphrase; suspend it around anything
+# that expands $PASSPHRASE.
+trace_off() { { set +x; } 2>/dev/null; }
+trace_on()  { (( VERBOSITY >= 3 )) && set -x || true; }
+
+# --------------------------------------------------------- requirements ------
+# Hard requirements beyond a stock Linux userland: age (the encryption), zstd,
+# util-linux `script` (gives age the tty it insists on), GNU tar/coreutils and
+# bash 5. pv (progress bar) and gum (prompts) are optional and degrade quietly.
+check_requirements() {
+    local -a missing=()
+    (( BASH_VERSINFO[0] >= 5 )) || die "bash 5 or newer is required (this is bash $BASH_VERSION)"
+    for cmd in age zstd tar script; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        {
+            printf '%sError:%s missing required tools: %s\n\n' "$C_RED" "$C_OFF" "${missing[*]}"
+            for cmd in "${missing[@]}"; do
+                case "$cmd" in
+                    age)    printf '  age     modern file encryption (https://age-encryption.org)\n          pacman -S age | apt install age | dnf install age | brew install age\n' ;;
+                    zstd)   printf '  zstd    compressor\n          pacman -S zstd | apt install zstd | dnf install zstd\n' ;;
+                    tar)    printf '  tar     GNU tar\n          pacman -S tar | apt install tar\n' ;;
+                    script) printf '  script  pty wrapper from util-linux\n          pacman -S util-linux | apt install bsdutils | dnf install util-linux\n' ;;
+                esac
+            done
+            printf '\nOptional: pv (progress bar), gum (nicer prompts).\n'
+        } >&2
+        exit 1
+    fi
+    [[ "$(script --version 2>/dev/null)" == *util-linux* ]] \
+        || die "'script' must be the util-linux version (BSD/macOS script has different flags)"
+    realpath -m / &>/dev/null && du -sb /dev/null &>/dev/null && stat -c %s /dev/null &>/dev/null \
+        || die "GNU coreutils are required (realpath -m, du -sb, stat -c)"
+    $HAVE_PV || msg 2 "pv not installed: running without a progress bar"
+}
 
 # ---------------------------------------------------------------- help ------
 show_help() {
@@ -75,6 +114,9 @@ ${C_BOLD}Examples${C_OFF}
   seal -q -c job.conf -p pass.txt X/     fully scripted, silent
 
 An empty passphrase at the prompt autogenerates a strong one and prints it.
+
+${C_BOLD}Requires${C_OFF} age, zstd, util-linux script, GNU tar/coreutils, bash 5 (Linux only).
+Optional: pv (progress bar), gum (prompts). Missing tools are reported at start.
 EOF
 )"
     else
@@ -104,6 +146,9 @@ ${C_BOLD}Examples${C_OFF}
   unseal X.tar.zst.age                   restore into current directory
   unseal --rm X.tar.zst.age ~/docs       restore then delete the archive
   unseal -q -p pass.txt X.tar.zst.age    fully scripted, silent
+
+${C_BOLD}Requires${C_OFF} age, zstd, util-linux script, GNU tar/coreutils, bash 5 (Linux only).
+Optional: pv (progress bar), gum (prompts). Missing tools are reported at start.
 EOF
 )"
     fi
@@ -113,7 +158,7 @@ EOF
     else
         printf '\n%s%s%s\n\n%s\n\n' "$C_BOLD" "$title" "$C_OFF" "$body"
     fi
-    exit 0
+    exit "${1:-0}"
 }
 
 # ---------------------------------------------------------------- args ------
@@ -123,6 +168,7 @@ parse_config() {
     while IFS='=' read -r key val; do
         key="${key%%#*}"; key="${key//[[:space:]]/}"
         [[ -z "$key" ]] && continue
+        val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"   # trim
         case "$key" in
             name)     [[ -n "$ARCHIVE" ]]    || ARCHIVE="$val" ;;
             level)    [[ -n "$LEVEL" ]]      || LEVEL="$val" ;;
@@ -162,10 +208,7 @@ done
 
 [[ -n "$CONFIG" ]] && parse_config "$CONFIG"
 $INTERACTIVE || ASSUME_YES=true
-
-for cmd in tar zstd age pv script; do
-    command -v "$cmd" &>/dev/null || die "'$cmd' is not installed (sudo pacman -S $cmd)"
-done
+check_requirements
 
 # ------------------------------------------------------------- prompts ------
 ui_input() { # header, default, placeholder
@@ -192,6 +235,7 @@ ui_confirm() { # question, default(yes/no)
 }
 
 get_passphrase() {
+    trace_off
     if [[ -n "$PASSFILE" ]]; then
         [[ -r "$PASSFILE" ]] || die "cannot read pass file: $PASSFILE"
         IFS= read -r PASSPHRASE < "$PASSFILE" || true
@@ -202,7 +246,7 @@ get_passphrase() {
         if [[ "$MODE" == "seal" ]]; then
             PASSPHRASE="$(ui_password "Passphrase (empty = autogenerate)")"
             if [[ -z "$PASSPHRASE" ]]; then
-                PASSPHRASE="$(openssl rand -base64 24)"
+                PASSPHRASE="$(head -c 24 /dev/urandom | base64 | tr -d '\n')"
                 printf '%sGenerated passphrase (save it now):%s %s\n' "$C_YELLOW" "$C_OFF" "$PASSPHRASE" >&2
             else
                 local confirm; confirm="$(ui_password "Confirm passphrase")"
@@ -215,6 +259,8 @@ get_passphrase() {
     else
         die "no passphrase: use --pass-file/--passphrase (or a config passfile=) when non-interactive"
     fi
+    [[ "$PASSPHRASE" == *$'\n'* ]] && die "passphrase must not contain a newline"
+    trace_on
 }
 
 # -------------------------------------------------------- progress bar ------
@@ -272,12 +318,15 @@ draw_bar() { # label, total_bytes; reads cumulative byte counts on stdin (pv -bn
 # age insists on reading passphrases from a tty, so run it under `script` with
 # the passphrase fed to the pty; the data travels on inherited fds 8/9.
 age_pty() { # extra age args...; passphrase lines on stdin
-    script -qec "age $* " /dev/null >/dev/null 2>&1
+    # script runs the command through $SHELL; force bash so ${var@Q} quoting
+    # is parsed correctly whatever the user's login shell is.
+    SHELL="$BASH" script -qec "age $* " /dev/null >/dev/null 2>&1
 }
 
 # ================================================================ seal ======
 run_seal() {
-    [[ ${#POSITIONAL[@]} -eq 1 ]] || { show_help; }
+    (( ${#POSITIONAL[@]} == 0 )) && show_help
+    (( ${#POSITIONAL[@]} == 1 )) || die "expected exactly one file or directory, got ${#POSITIONAL[@]} (see --help)"
     TARGET="${POSITIONAL[0]}"
     [[ -e "$TARGET" ]] || die "not found: $TARGET"
     local target_abs parent base
@@ -293,13 +342,29 @@ run_seal() {
         [[ -n "$EXTRA_RAW" ]]   || EXTRA_RAW="$(ui_input "Extra zstd args (optional)" "" "--long")"
     fi
     ARCHIVE="${ARCHIVE:-$default_name}"
-    [[ "$ARCHIVE" == *.age ]] || ARCHIVE="${ARCHIVE}.tar.zst.age"
+    case "$ARCHIVE" in
+        *.age)     ;;
+        *.tar.zst) ARCHIVE="${ARCHIVE}.age" ;;
+        *)         ARCHIVE="${ARCHIVE}.tar.zst.age" ;;
+    esac
     LEVEL="${LEVEL:-10}"
     [[ "$LEVEL" =~ ^[0-9]+$ && "$LEVEL" -ge 1 && "$LEVEL" -le 22 ]] || die "level must be 1-22"
     DELETE_ORIG="${DELETE_ORIG:-no}"
+    [[ "${DELETE_ORIG,,}" == y* || "${DELETE_ORIG,,}" == true ]] && DELETE_ORIG=yes || DELETE_ORIG=no
     local ultra=() extra=()
     (( LEVEL > 19 )) && ultra=(--ultra)
     [[ -n "$EXTRA_RAW" ]] && read -r -a extra <<< "$EXTRA_RAW"
+
+    # The archive must not land inside the directory being sealed: tar would
+    # read the half-written file, and --delete would then remove the archive.
+    local archive_abs; archive_abs="$(realpath -m -- "$ARCHIVE")"
+    [[ "$archive_abs" == "$target_abs" || "$archive_abs" == "$target_abs"/* ]] \
+        && die "archive '$ARCHIVE' would be inside the target '$TARGET'; use --name to put it elsewhere"
+    [[ -d "$ARCHIVE" ]] && die "'$ARCHIVE' is a directory"
+    if [[ "$DELETE_ORIG" == yes ]]; then
+        [[ -L "$TARGET" ]] && die "refusing --delete through a symlink: '$TARGET' points to '$target_abs'"
+        [[ "$target_abs" == / || "$target_abs" == "$HOME" ]] && die "refusing --delete on $target_abs"
+    fi
 
     if [[ -e "$ARCHIVE" && "$FORCE" != true ]]; then
         if $INTERACTIVE && ! $ASSUME_YES; then
@@ -317,7 +382,7 @@ run_seal() {
     SEAL_TMP="$(mktemp -p "$(dirname -- "$(realpath -m -- "$ARCHIVE")")" ".seal.XXXXXX")"
     trap 'rm -f "$SEAL_TMP"' EXIT
 
-    if (( VERBOSITY == 0 )); then
+    if (( VERBOSITY == 0 )) || ! $HAVE_PV; then
         exec 9< <(tar -cf - -C "$parent" "$base" | zstd -q -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
     elif (( VERBOSITY >= 2 )); then
         exec 9< <(tar -cf - -C "$parent" "$base" | pv -pterb -s "$size" | zstd -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
@@ -325,8 +390,10 @@ run_seal() {
         exec 9< <(tar -cf - -C "$parent" "$base" | pv -bn -i 0.2 2> >(draw_bar "Sealing $base" "$size") | zstd -q -T0 "-$LEVEL" "${ultra[@]}" "${extra[@]}")
     fi
     pipe_pid=$!
+    trace_off
     printf '%s\n%s\n' "$PASSPHRASE" "$PASSPHRASE" | age_pty -e -p -o "${SEAL_TMP@Q}" /dev/fd/9 \
         || { wait "$pipe_pid" 2>/dev/null || true; die "encryption failed"; }
+    trace_on
     exec 9<&-
     wait "$pipe_pid" || die "tar/zstd pipeline failed"
     (( VERBOSITY == 1 )) && printf '\r\e[2K' >&2
@@ -337,7 +404,7 @@ run_seal() {
     orig_size="$(du -sh -- "$target_abs" | cut -f1)"
     new_size="$(du -sh -- "$ARCHIVE" | cut -f1)"
     msg 1 "${C_GREEN}✔${C_OFF} Sealed ${C_BOLD}$base${C_OFF} → ${C_CYAN}$ARCHIVE${C_OFF} ($orig_size → $new_size)"
-    if [[ "${DELETE_ORIG,,}" == y* ]]; then
+    if [[ "$DELETE_ORIG" == yes ]]; then
         rm -rf -- "$target_abs"
         msg 1 "${C_GREEN}✔${C_OFF} Deleted original: $target_abs"
     fi
@@ -345,7 +412,8 @@ run_seal() {
 
 # ============================================================== unseal ======
 run_unseal() {
-    [[ ${#POSITIONAL[@]} -ge 1 && ${#POSITIONAL[@]} -le 2 ]] || { show_help; }
+    (( ${#POSITIONAL[@]} == 0 )) && show_help
+    (( ${#POSITIONAL[@]} <= 2 )) || die "expected <archive> [dest-dir], got ${#POSITIONAL[@]} arguments (see --help)"
     ARCHIVE="${POSITIONAL[0]}"
     DEST="${POSITIONAL[1]:-${DEST:-.}}"
     [[ -f "$ARCHIVE" ]] || die "not found: $ARCHIVE"
@@ -355,21 +423,28 @@ run_unseal() {
     local asize p8 p9
     asize="$(stat -c %s -- "$ARCHIVE")"
     UNSEAL_TMPDIR="$(mktemp -d -p "$DEST" ".unseal.XXXXXX")"
-    trap 'rm -rf "$UNSEAL_TMPDIR"' EXIT
+    UNSEAL_ERRLOG="$(mktemp)"
+    trap 'rm -rf "$UNSEAL_TMPDIR" "$UNSEAL_ERRLOG"' EXIT
     msg 2 "archive=$ARCHIVE dest=$DEST rm_after=$RM_ARCHIVE size=${asize}B"
 
-    if (( VERBOSITY == 0 )); then
+    if (( VERBOSITY == 0 )) || ! $HAVE_PV; then
         exec 8< "$ARCHIVE"; p8=""
     elif (( VERBOSITY >= 2 )); then
         exec 8< <(pv -pterb -- "$ARCHIVE"); p8=$!
     else
         exec 8< <(pv -bn -i 0.2 -- "$ARCHIVE" 2> >(draw_bar "Unsealing $(basename -- "$ARCHIVE")" "$asize")); p8=$!
     fi
-    exec 9> >(zstd -q -d | tar -xf - -C "$UNSEAL_TMPDIR"); p9=$!
+    # --long=31 only raises the decoder's window limit, so archives sealed with
+    # -x --long=NN (NN > 27) unpack without the matching flag.
+    # Pipeline stderr goes to a log: when age fails, zstd's complaint about the
+    # truncated stream is noise; when age succeeds, the log is the real error.
+    exec 9> >(zstd -q -d --long=31 2>"$UNSEAL_ERRLOG" | tar -xf - -C "$UNSEAL_TMPDIR" 2>>"$UNSEAL_ERRLOG"); p9=$!
+    trace_off
     printf '%s\n' "$PASSPHRASE" | age_pty -d -o /dev/fd/9 /dev/fd/8 \
         || die "decryption failed (wrong passphrase or corrupted archive)"
+    trace_on
     exec 8<&- 9>&-
-    wait "$p9" || die "zstd/tar pipeline failed"
+    wait "$p9" || { cat "$UNSEAL_ERRLOG" >&2; die "zstd/tar pipeline failed"; }
     [[ -n "$p8" ]] && { wait "$p8" 2>/dev/null || true; }
     (( VERBOSITY == 1 )) && printf '\r\e[2K' >&2
 
@@ -393,7 +468,7 @@ run_unseal() {
         msg 1 "${C_GREEN}✔${C_OFF} Deleted archive: $ARCHIVE"
     fi
     trap - EXIT
-    rm -rf "$UNSEAL_TMPDIR"
+    rm -rf "$UNSEAL_TMPDIR" "$UNSEAL_ERRLOG"
 }
 
 if [[ "$MODE" == "seal" ]]; then run_seal; else run_unseal; fi
