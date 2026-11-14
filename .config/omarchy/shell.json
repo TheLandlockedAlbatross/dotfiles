@@ -1,37 +1,12 @@
 {
   "bar": {
-    "centerAnchor": "omarchy.clock",
     "layout": {
       "center": [
-        {
-          "id": "omarchy.indicators",
-          "items": [
-            "Dictation",
-            "ScreenRecording",
-            "Reminder"
-          ]
-        },
         {
           "id": "omarchy.clock",
           "format": "dddd HH:mm:ss",
           "formatAlt": "d MMMM 'W'ww yyyy",
           "verticalFormat": "HH\n—\nmm"
-        },
-        {
-          "id": "omarchy.weather"
-        },
-        {
-          "id": "omarchy.indicators",
-          "items": [
-            "Dnd",
-            "StayAwake"
-          ]
-        },
-        {
-          "id": "omarchy.keyboard-layout"
-        },
-        {
-          "id": "omarchy.system-update"
         }
       ],
       "left": [
@@ -45,6 +20,9 @@
       "right": [
         {
           "id": "omarchy.tray"
+        },
+        {
+          "id": "omarchy.keyboard-layout"
         },
         {
           "id": "tla.poll-rate"
@@ -75,6 +53,56 @@
         },
         {
           "id": "omarchy.power"
+        }
+      ],
+      "centerBegin": [
+        {
+          "id": "omarchy.indicators",
+          "items": [
+            "Dictation",
+            "ScreenRecording",
+            "Reminder"
+          ]
+        }
+      ],
+      "centerEnd": [
+        {
+          "id": "omarchy.elsewhen",
+          "cities": [
+            {
+              "name": "New York",
+              "zone": "America/New_York"
+            },
+            {
+              "name": "London",
+              "zone": "Europe/London"
+            },
+            {
+              "name": "Dubai",
+              "zone": "Asia/Dubai"
+            },
+            {
+              "name": "Tokyo",
+              "zone": "Asia/Tokyo"
+            },
+            {
+              "name": "Los Angeles",
+              "zone": "America/Los_Angeles"
+            }
+          ]
+        },
+        {
+          "id": "omarchy.weather"
+        },
+        {
+          "id": "omarchy.indicators",
+          "items": [
+            "Dnd",
+            "StayAwake"
+          ]
+        },
+        {
+          "id": "omarchy.system-update"
         }
       ]
     },
