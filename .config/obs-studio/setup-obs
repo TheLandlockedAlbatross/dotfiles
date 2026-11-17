@@ -3,10 +3,10 @@
 # requires-python = ">=3.11"
 # dependencies = ["websocket-client"]
 # ///
-"""obs-screens: one-time setup for recording any mix of monitors in OBS.
+"""setup-obs: one-time setup for recording any mix of monitors in OBS.
 
-  obs-screens          set up whatever is missing
-  obs-screens --redo   bind every monitor source again from scratch
+  ~/.config/obs-studio/setup-obs          set up whatever is missing
+  ~/.config/obs-studio/setup-obs --redo   bind every monitor source again
 
 Day to day there is nothing to run: click a scene in OBS (All, Top row,
 Left column, Top left, ...) and the fit-canvas.lua script resizes the canvas
@@ -45,7 +45,7 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 
 
 def die(msg):
-    sys.exit(f"obs-screens: {msg}")
+    sys.exit(f"setup-obs: {msg}")
 
 
 # ---------------------------------------------------------------- monitors
@@ -264,8 +264,8 @@ def cmd_setup(mons, redo):
             die("OBS is recording or streaming; stop it first")
     stop_obs()
     enable_ws()
-    choice = RUNTIME / "obs-screens-choice"
-    picker = RUNTIME / "obs-screens-picker"
+    choice = RUNTIME / "setup-obs-choice"
+    picker = RUNTIME / "setup-obs-picker"
     picker.write_text(f"#!/bin/sh\nprintf '[SELECTION]r/screen:%s\\n' \"$(cat '{choice}')\"\n")
     picker.chmod(0o700)
     original = XDPH_CONF.read_text() if XDPH_CONF.exists() else None
@@ -383,7 +383,7 @@ def cmd_setup(mons, redo):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="obs-screens", description=__doc__,
+    ap = argparse.ArgumentParser(prog="setup-obs", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", choices=["setup"], help="optional, the default")
     ap.add_argument("--redo", action="store_true",
