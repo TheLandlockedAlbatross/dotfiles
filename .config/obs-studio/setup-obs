@@ -205,6 +205,27 @@ def items(obs):
     return {i["sourceName"]: i for i in got if i.get("inputKind") == KIND}
 
 
+# Recording encoder, first one this machine has: AV1 before HEVC, on the GPU.
+# With no GPU encoder for either, x264 on the CPU (lighter than SVT-AV1 at
+# these sizes). GPU H.264 is not a candidate: NVENC stops at 4096 pixels and
+# two monitors side by side are 5120. Left: OBS encoder id as its log lists
+# it. Right: the Settings > Output (Simple) recording encoder value.
+# Only the NVIDIA entries have been tried on real hardware.
+ENCODERS = (("obs_nvenc_av1_tex", "nvenc_av1"), ("av1_texture_amf", "amd_av1"),
+            ("obs_qsv11_av1", "qsv_av1"), ("obs_nvenc_hevc_tex", "nvenc_hevc"),
+            ("h265_texture_amf", "amd_hevc"), ("obs_x264", "x264"))
+
+
+def pick_encoder():
+    """Best available recording encoder, read from the running OBS's log."""
+    logs = sorted((OBS_DIR / "logs").glob("*.txt"), key=lambda f: f.stat().st_mtime)
+    listed = logs[-1].read_text(errors="replace") if logs else ""
+    for encoder_id, simple_name in ENCODERS:
+        if f"- {encoder_id} (" in listed:
+            return simple_name
+    return "x264"
+
+
 def restart_portal():
     subprocess.run(["systemctl", "--user", "restart", "xdg-desktop-portal-hyprland"])
     time.sleep(1.5)
@@ -282,9 +303,7 @@ def cmd_setup(mons, redo):
             time.sleep(1)
             videos = subprocess.run(["xdg-user-dir", "VIDEOS"], capture_output=True,
                                     text=True).stdout.strip() or str(Path.home() / "Videos")
-            # A four-monitor canvas is past H.264's 4096 limit on NVENC: record HEVC.
             for group, key, value in (("SimpleOutput", "RecQuality", "Small"),
-                                      ("SimpleOutput", "RecEncoder", "nvenc_hevc"),
                                       ("SimpleOutput", "RecFormat2", "mkv"),
                                       ("SimpleOutput", "FilePath", videos),
                                       ("Video", "FPSType", "1"), ("Video", "FPSInt", "60")):
@@ -295,6 +314,10 @@ def cmd_setup(mons, redo):
             obs.call("CreateSceneCollection", sceneCollectionName=NAME)
             time.sleep(2)
         select_workspace(obs)
+        encoder = pick_encoder()
+        obs.call("SetProfileParameter", parameterCategory="SimpleOutput",
+                 parameterName="RecEncoder", parameterValue=encoder)
+        print(f"recording encoder: {encoder}")
         scenes = [s["sceneName"] for s in obs.call("GetSceneList")["scenes"]]
         if SCENE not in scenes:
             obs.call("CreateScene", sceneName=SCENE)
