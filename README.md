@@ -120,7 +120,9 @@ uosc + thumbfast and other plugins, modular includes under `conf/` (including an
 
 Records any mix of monitors at native resolution by switching scenes. `scripts/fit-canvas.lua` runs inside OBS: on every scene change it resizes the canvas to exactly fit the monitor sources visible in that scene, so one monitor records at its own size and several record at their combined size, with no scaling or black bars. It also has an output-size slider and a "Fit now" button under Tools > Scripts.
 
-`setup-obs` is a one-time setup, rerun after adding or replacing a monitor. It creates the `Screens` profile and scene collection, one Screen Capture source per Hyprland monitor (bound without the share picker asking), the layout scenes (All, rows, columns, each monitor), and picks the recording encoder: AV1 then HEVC on the GPU, x264 on the CPU when neither exists.
+`setup-obs` is a one-time setup, rerun after adding or replacing a monitor or microphone. It creates the `Screens` profile and scene collection, one Screen Capture source per Hyprland monitor (bound without the share picker asking), the layout scenes (All, rows, columns, each monitor), and picks the recording encoder: AV1 then HEVC on the GPU, x264 on the CPU when neither exists.
+
+Audio follows the system defaults, so no device names are stored: whatever plays on the default output is recorded, as Opus (AAC when OBS lacks it). When the default input is a real microphone it is recorded too, with the mix on track 1, the desktop alone on track 2 and the microphone alone on track 3.
 
 Only these two files are tracked; profiles, scene collections and the rest of the OBS config are machine state and stay local.
 

@@ -15,7 +15,9 @@ to that scene's monitors at native resolution.
 Setup creates the `Screens` profile and scene collection, one Screen Capture
 source per Hyprland monitor (bound to that monitor without the share picker
 asking), the layout scenes, and loads fit-canvas.lua into the collection.
-Run it again after adding or replacing a monitor.
+Audio: whatever plays on the default output is recorded, plus the default
+microphone when there is one, each also on its own track.
+Run it again after adding or replacing a monitor or microphone.
 """
 
 import argparse
@@ -216,14 +218,58 @@ ENCODERS = (("obs_nvenc_av1_tex", "nvenc_av1"), ("av1_texture_amf", "amd_av1"),
             ("h265_texture_amf", "amd_hevc"), ("obs_x264", "x264"))
 
 
-def pick_encoder():
-    """Best available recording encoder, read from the running OBS's log."""
+def encoders_listed():
+    """The encoder list the running OBS wrote to its log at startup."""
     logs = sorted((OBS_DIR / "logs").glob("*.txt"), key=lambda f: f.stat().st_mtime)
-    listed = logs[-1].read_text(errors="replace") if logs else ""
+    return logs[-1].read_text(errors="replace") if logs else ""
+
+
+def pick_encoder():
+    """Best available recording video encoder."""
+    listed = encoders_listed()
     for encoder_id, simple_name in ENCODERS:
         if f"- {encoder_id} (" in listed:
             return simple_name
     return "x264"
+
+
+def pick_audio_encoder():
+    """Opus (royalty-free) when OBS has it, else AAC."""
+    return "opus" if "- ffmpeg_opus (" in encoders_listed() else "aac"
+
+
+# Audio follows the system defaults, so no device names are stored. Track 1 is
+# the mix every player picks; with a microphone, track 2 is the desktop alone
+# and track 3 the microphone alone, for editing. "mixers" is a bitmask of the
+# tracks a source feeds.
+AUDIO = {"desktop": ("DesktopAudioDevice1", "Desktop Audio", "pulse_output_capture", 0b011),
+         "mic": ("AuxAudioDevice1", "Mic/Aux", "pulse_input_capture", 0b101)}
+
+
+def audio_json(which):
+    _, name, kind, mixers = AUDIO[which]
+    return {"name": name, "uuid": str(uuid.uuid4()), "id": kind, "versioned_id": kind,
+            "settings": {"device_id": "default"}, "mixers": mixers, "sync": 0,
+            "flags": 0, "volume": 1.0, "balance": 0.5, "enabled": True, "muted": False,
+            "push-to-mute": False, "push-to-mute-delay": 0, "push-to-talk": False,
+            "push-to-talk-delay": 0, "hotkeys": {}, "deinterlace_mode": 0,
+            "deinterlace_field_order": 0, "monitoring_type": 0, "private_settings": {}}
+
+
+def default_input_is_microphone():
+    """False when the default input is the monitor of an output.
+
+    Recording that as a "microphone" would only double the desktop sound.
+    """
+    out = subprocess.run(["pactl", "get-default-source"], capture_output=True, text=True)
+    name = out.stdout.strip()
+    return out.returncode == 0 and bool(name) and not name.endswith(".monitor")
+
+
+def has_microphone_source():
+    if not SCENE_FILE.exists():
+        return False
+    return AUDIO["mic"][0] in json.loads(SCENE_FILE.read_text())
 
 
 def restart_portal():
@@ -318,6 +364,14 @@ def cmd_setup(mons, redo):
         obs.call("SetProfileParameter", parameterCategory="SimpleOutput",
                  parameterName="RecEncoder", parameterValue=encoder)
         print(f"recording encoder: {encoder}")
+        mic = has_microphone_source() or default_input_is_microphone()
+        audio_encoder = pick_audio_encoder()
+        for key, value in (("RecAudioEncoder", audio_encoder),
+                           ("RecTracks", "7" if mic else "1")):
+            obs.call("SetProfileParameter", parameterCategory="SimpleOutput",
+                     parameterName=key, parameterValue=value)
+        print(f"audio: {audio_encoder}, desktop" + (" + microphone, 3 tracks" if mic else
+              " only (the default input is not a microphone)"))
         scenes = [s["sceneName"] for s in obs.call("GetSceneList")["scenes"]]
         if SCENE not in scenes:
             obs.call("CreateScene", sceneName=SCENE)
@@ -385,6 +439,8 @@ def cmd_setup(mons, redo):
     stop_obs()
 
     data = json.loads(SCENE_FILE.read_text())
+    for which in ["desktop"] + (["mic"] if mic else []):
+        data.setdefault(AUDIO[which][0], audio_json(which))
     tools = [t for t in data.setdefault("modules", {}).get("scripts-tool", [])
              if t.get("path") != str(SCRIPT)]
     mine = next((t for t in data["modules"].get("scripts-tool", [])
