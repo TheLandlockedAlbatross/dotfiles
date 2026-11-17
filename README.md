@@ -116,6 +116,14 @@ Menu overrides (monitor tools, VPN picker, extended setup), theme hooks, and the
 
 uosc + thumbfast and other plugins, modular includes under `conf/` (including an isolated 4090 GPU profile), and extensive custom keybinds. `Ctrl+K` inside the player shows the key help.
 
+### OBS (`.config/obs-studio/`)
+
+Records any mix of monitors at native resolution by switching scenes. `scripts/fit-canvas.lua` runs inside OBS: on every scene change it resizes the canvas to exactly fit the monitor sources visible in that scene, so one monitor records at its own size and several record at their combined size, with no scaling or black bars. It also has an output-size slider and a "Fit now" button under Tools > Scripts.
+
+`setup-obs` is a one-time setup, rerun after adding or replacing a monitor. It creates the `Screens` profile and scene collection, one Screen Capture source per Hyprland monitor (bound without the share picker asking), the layout scenes (All, rows, columns, each monitor), and picks the recording encoder: AV1 then HEVC on the GPU, x264 on the CPU when neither exists.
+
+Only these two files are tracked; profiles, scene collections and the rest of the OBS config are machine state and stay local.
+
 ### Firefox (`.mozilla/`)
 
 Encrypted profile archives (see Security above), repacked as settings and userscripts change.
