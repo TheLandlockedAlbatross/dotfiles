@@ -1,0 +1,396 @@
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["websocket-client"]
+# ///
+"""obs-screens: one-time setup for recording any mix of monitors in OBS.
+
+  obs-screens          set up whatever is missing
+  obs-screens --redo   bind every monitor source again from scratch
+
+Day to day there is nothing to run: click a scene in OBS (All, Top row,
+Left column, Top left, ...) and the fit-canvas.lua script resizes the canvas
+to that scene's monitors at native resolution.
+
+Setup creates the `Screens` profile and scene collection, one Screen Capture
+source per Hyprland monitor (bound to that monitor without the share picker
+asking), the layout scenes, and loads fit-canvas.lua into the collection.
+Run it again after adding or replacing a monitor.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+import websocket
+
+NAME = "Screens"  # the profile and the scene collection
+SCENE = "All"  # the scene holding every monitor
+KIND = "pipewire-screen-capture-source"
+OBS_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "obs-studio"
+WS_CONFIG = OBS_DIR / "plugin_config/obs-websocket/config.json"
+SCENE_FILE = OBS_DIR / "basic/scenes" / f"{NAME}.json"
+PROFILE_DIR = OBS_DIR / "basic/profiles" / NAME
+SCRIPT = OBS_DIR / "scripts/fit-canvas.lua"
+XDPH_CONF = Path.home() / ".config/hypr/xdph.conf"
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+
+
+def die(msg):
+    sys.exit(f"obs-screens: {msg}")
+
+
+# ---------------------------------------------------------------- monitors
+
+def monitors():
+    """Hyprland monitors with a grid row/col, in reading order."""
+    out = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True)
+    if out.returncode:
+        die("hyprctl monitors failed (is Hyprland running?)")
+    mons = [m for m in json.loads(out.stdout) if not m.get("disabled")]
+    xs = sorted({m["x"] for m in mons})
+    ys = sorted({m["y"] for m in mons})
+    res = [{"name": m["name"], "col": xs.index(m["x"]), "row": ys.index(m["y"])}
+           for m in mons]
+    res.sort(key=lambda m: (m["row"], m["col"]))
+    return res
+
+
+def layouts(mons):
+    """Scene name -> monitor names, in the order the scenes are listed."""
+    rows = max(m["row"] for m in mons)
+    cols = max(m["col"] for m in mons)
+    out = {"All": [m["name"] for m in mons]}
+    if rows:
+        out["Top row"] = [m["name"] for m in mons if m["row"] == 0]
+        out["Bottom row"] = [m["name"] for m in mons if m["row"] == rows]
+    if cols:
+        out["Left column"] = [m["name"] for m in mons if m["col"] == 0]
+        out["Right column"] = [m["name"] for m in mons if m["col"] == cols]
+    if rows == 1 and cols == 1:
+        for m in mons:
+            out[f"{('Top', 'Bottom')[m['row']]} {('left', 'right')[m['col']]}"] = [m["name"]]
+    elif len(mons) > 1:
+        for m in mons:
+            out[m["name"]] = [m["name"]]
+    return out
+
+
+# ---------------------------------------------------------------- OBS link
+
+class Obs:
+    def __init__(self, port, password):
+        self.ws = websocket.create_connection(f"ws://127.0.0.1:{port}", timeout=20)
+        hello = json.loads(self.ws.recv())["d"]
+        ident = {"rpcVersion": 1, "eventSubscriptions": 0}
+        auth = hello.get("authentication")
+        if auth:
+            secret = base64.b64encode(
+                hashlib.sha256((password + auth["salt"]).encode()).digest()).decode()
+            ident["authentication"] = base64.b64encode(
+                hashlib.sha256((secret + auth["challenge"]).encode()).digest()).decode()
+        self.ws.send(json.dumps({"op": 1, "d": ident}))
+        if json.loads(self.ws.recv())["op"] != 2:
+            die("OBS refused the WebSocket login")
+        self.n = 0
+
+    def call(self, request, ok_fail=False, **data):
+        self.n += 1
+        self.ws.send(json.dumps({"op": 6, "d": {
+            "requestType": request, "requestId": str(self.n), "requestData": data}}))
+        while True:
+            msg = json.loads(self.ws.recv())
+            if msg["op"] == 7 and msg["d"]["requestId"] == str(self.n):
+                break
+        status = msg["d"]["requestStatus"]
+        if not status["result"]:
+            if ok_fail:
+                return None
+            die(f"OBS rejected {request}: {status.get('comment') or status['code']}")
+        return msg["d"].get("responseData") or {}
+
+
+def obs_pids():
+    out = subprocess.run(["pgrep", "-x", "obs"], capture_output=True, text=True).stdout
+    return [int(p) for p in out.split()]
+
+
+def ws_settings():
+    if not WS_CONFIG.exists():
+        return None
+    return json.loads(WS_CONFIG.read_text())
+
+
+def enable_ws():
+    """Turn on OBS's WebSocket server. Only safe while OBS is closed."""
+    cfg = ws_settings() or {"alerts_enabled": False, "auth_required": True,
+                            "first_load": False, "server_port": 4455}
+    if not cfg.get("server_password"):
+        cfg["server_password"] = base64.urlsafe_b64encode(os.urandom(18)).decode()
+    cfg["server_enabled"] = True
+    cfg["first_load"] = False
+    WS_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    WS_CONFIG.write_text(json.dumps(cfg, indent=2))
+
+
+def launch_obs():
+    cmd = "obs"
+    if PROFILE_DIR.is_dir() and SCENE_FILE.exists():
+        cmd += f" --profile {NAME} --collection {NAME}"
+    subprocess.run(["hyprctl", "dispatch", "exec", cmd], capture_output=True)
+
+
+def stop_obs():
+    pids = obs_pids()
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    for _ in range(100):
+        if not obs_pids():
+            return
+        time.sleep(0.1)
+    die("OBS did not close; close it by hand and run this again")
+
+
+def connect(start=True):
+    """A live link to OBS, starting OBS if it is closed."""
+    cfg = ws_settings()
+    running = bool(obs_pids())
+    if not running:
+        if not start:
+            die("OBS is not running")
+        if not cfg or not cfg.get("server_enabled"):
+            enable_ws()
+            cfg = ws_settings()
+        launch_obs()
+    elif not cfg or not cfg.get("server_enabled"):
+        die("OBS is running with its WebSocket server off. Close OBS and run this "
+            "again (it turns the server on), or enable it in Tools > WebSocket "
+            "Server Settings.")
+    deadline = time.time() + (5 if running else 40)
+    while True:
+        try:
+            return Obs(cfg.get("server_port", 4455), cfg.get("server_password", ""))
+        except (OSError, websocket.WebSocketException):
+            if time.time() > deadline:
+                die("could not reach OBS's WebSocket server on port "
+                    f"{cfg.get('server_port', 4455)}. Close OBS and run this again.")
+            time.sleep(0.5)
+
+
+def busy(obs):
+    return (obs.call("GetRecordStatus")["outputActive"]
+            or obs.call("GetStreamStatus")["outputActive"])
+
+
+def select_workspace(obs):
+    """Switch OBS to the Screens profile and scene collection."""
+    if obs.call("GetProfileList")["currentProfileName"] != NAME:
+        obs.call("SetCurrentProfile", profileName=NAME)
+        time.sleep(1)
+    if obs.call("GetSceneCollectionList")["currentSceneCollectionName"] != NAME:
+        obs.call("SetCurrentSceneCollection", sceneCollectionName=NAME)
+        time.sleep(2)
+
+
+def items(obs):
+    got = obs.call("GetSceneItemList", sceneName=SCENE)["sceneItems"]
+    return {i["sourceName"]: i for i in got if i.get("inputKind") == KIND}
+
+
+def restart_portal():
+    subprocess.run(["systemctl", "--user", "restart", "xdg-desktop-portal-hyprland"])
+    time.sleep(1.5)
+
+
+def wait_for_size(obs, item_id, seconds):
+    for _ in range(seconds * 4):
+        t = obs.call("GetSceneItemTransform", sceneName=SCENE, sceneItemId=item_id)
+        if t["sceneItemTransform"]["sourceWidth"] > 0:
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def source_json(name):
+    """A monitor source and its scene item, in the shape OBS itself saves."""
+    uid = str(uuid.uuid4())
+    source = {"name": name, "uuid": uid, "id": KIND, "versioned_id": KIND,
+              "settings": {"ShowCursor": True, "RestoreToken": ""},
+              "mixers": 0, "sync": 0, "flags": 0, "volume": 1.0, "balance": 0.5,
+              "enabled": True, "muted": False, "push-to-mute": False,
+              "push-to-mute-delay": 0, "push-to-talk": False, "push-to-talk-delay": 0,
+              "hotkeys": {}, "deinterlace_mode": 0, "deinterlace_field_order": 0,
+              "monitoring_type": 0, "private_settings": {}}
+    item = {"name": name, "source_uuid": uid, "visible": True, "locked": False,
+            "rot": 0.0, "align": 5, "bounds_type": 0, "bounds_align": 0,
+            "bounds_crop": False, "crop_left": 0, "crop_top": 0, "crop_right": 0,
+            "crop_bottom": 0, "group_item_backup": False,
+            "pos": {"x": 0.0, "y": 0.0}, "scale": {"x": 1.0, "y": 1.0},
+            "bounds": {"x": 0.0, "y": 0.0}, "scale_filter": "disable",
+            "blend_method": "default", "blend_type": "normal",
+            "show_transition": {"duration": 0}, "hide_transition": {"duration": 0},
+            "private_settings": {}}
+    return source, item
+
+
+def cmd_setup(mons, redo):
+    """Profile, scene collection, one bound source per monitor, layout scenes.
+
+    A new monitor source makes Hyprland's share picker pop up, and it does not
+    say which source is asking. So while binding, the portal uses a stand-in
+    picker that answers with the monitor being set up, and the sources are
+    added one per OBS start so only one of them asks at a time. OBS saves a
+    restore token for each, which makes later starts silent.
+
+    The sources are written into the scene file instead of being created over
+    the WebSocket: a source created from a WebSocket thread never gets the
+    portal's reply.
+    """
+    if not SCRIPT.exists():
+        die(f"{SCRIPT} is missing")
+    was_enabled = bool((ws_settings() or {}).get("server_enabled"))
+    if obs_pids():
+        if not was_enabled:  # no way to ask it whether it is recording
+            die("close OBS first, then run this again")
+        if busy(connect(start=False)):
+            die("OBS is recording or streaming; stop it first")
+    stop_obs()
+    enable_ws()
+    choice = RUNTIME / "obs-screens-choice"
+    picker = RUNTIME / "obs-screens-picker"
+    picker.write_text(f"#!/bin/sh\nprintf '[SELECTION]r/screen:%s\\n' \"$(cat '{choice}')\"\n")
+    picker.chmod(0o700)
+    original = XDPH_CONF.read_text() if XDPH_CONF.exists() else None
+    lines = [l for l in (original or "").splitlines() if "custom_picker_binary" not in l]
+    try:
+        XDPH_CONF.write_text("\n".join(lines) + "\nscreencopy {\n"
+                             f"    allow_token_by_default = true\n"
+                             f"    custom_picker_binary = {picker}\n}}\n")
+        restart_portal()
+
+        obs = connect()
+        if NAME not in obs.call("GetProfileList")["profiles"]:
+            obs.call("CreateProfile", profileName=NAME)
+            time.sleep(1)
+            videos = subprocess.run(["xdg-user-dir", "VIDEOS"], capture_output=True,
+                                    text=True).stdout.strip() or str(Path.home() / "Videos")
+            # A four-monitor canvas is past H.264's 4096 limit on NVENC: record HEVC.
+            for group, key, value in (("SimpleOutput", "RecQuality", "Small"),
+                                      ("SimpleOutput", "RecEncoder", "nvenc_hevc"),
+                                      ("SimpleOutput", "RecFormat2", "mkv"),
+                                      ("SimpleOutput", "FilePath", videos),
+                                      ("Video", "FPSType", "1"), ("Video", "FPSInt", "60")):
+                obs.call("SetProfileParameter", parameterCategory=group,
+                         parameterName=key, parameterValue=value)
+        fresh = NAME not in obs.call("GetSceneCollectionList")["sceneCollections"]
+        if fresh:
+            obs.call("CreateSceneCollection", sceneCollectionName=NAME)
+            time.sleep(2)
+        select_workspace(obs)
+        scenes = [s["sceneName"] for s in obs.call("GetSceneList")["scenes"]]
+        if SCENE not in scenes:
+            obs.call("CreateScene", sceneName=SCENE)
+        obs.call("SetCurrentProgramScene", sceneName=SCENE)
+        if fresh:  # the empty scene a new collection starts with
+            for other in scenes:
+                obs.call("RemoveScene", ok_fail=True, sceneName=other)
+        stop_obs()
+
+        for m in mons:
+            name = m["name"]
+            data = json.loads(SCENE_FILE.read_text())
+            scene = next(s for s in data["sources"]
+                         if s["id"] == "scene" and s["name"] == SCENE)
+            old = next((s for s in data["sources"]
+                        if s["id"] == KIND and s["name"] == name), None)
+            if old and old["settings"].get("RestoreToken") and not redo:
+                print(f"{name}: already bound")
+                continue
+            if old:  # keep the source and every scene's item for it, rebind only
+                old["settings"]["RestoreToken"] = ""
+            else:
+                source, item = source_json(name)
+                scene["settings"]["id_counter"] = scene["settings"].get("id_counter", 0) + 1
+                item["id"] = scene["settings"]["id_counter"]
+                data["sources"].append(source)
+                scene["settings"]["items"].append(item)
+            data["current_scene"] = data["current_program_scene"] = SCENE
+            SCENE_FILE.write_text(json.dumps(data))
+            choice.write_text(name)
+            obs = connect()
+            ok = wait_for_size(obs, items(obs)[name]["sceneItemId"], 20)
+            stop_obs()  # saves the restore token into the scene file
+            saved = json.loads(SCENE_FILE.read_text())
+            token = next(s for s in saved["sources"] if s["id"] == KIND
+                         and s["name"] == name)["settings"].get("RestoreToken")
+            print(f"{name}: " + ("bound" if ok and token else
+                                 "NO PICTURE" if not ok else "no restore token saved"))
+    finally:
+        if original is None:
+            XDPH_CONF.unlink(missing_ok=True)
+        else:
+            XDPH_CONF.write_text(original)
+        stop_obs()
+        restart_portal()
+        picker.unlink(missing_ok=True)
+        choice.unlink(missing_ok=True)
+
+    # Layout scenes, then prove every monitor reconnects with the real picker back.
+    obs = connect()
+    select_workspace(obs)
+    want = layouts(mons)
+    scenes = [s["sceneName"] for s in obs.call("GetSceneList")["scenes"]]
+    for scene_name, names in want.items():
+        if scene_name not in scenes:
+            obs.call("CreateScene", sceneName=scene_name)
+        have = [i["sourceName"] for i in
+                obs.call("GetSceneItemList", sceneName=scene_name)["sceneItems"]]
+        for name in names:
+            if name not in have:
+                obs.call("CreateSceneItem", sceneName=scene_name, sourceName=name)
+    obs.call("SetCurrentProgramScene", sceneName=SCENE)
+    dead = [n for n, i in items(obs).items()
+            if not wait_for_size(obs, i["sceneItemId"], 15)]
+    stop_obs()
+
+    data = json.loads(SCENE_FILE.read_text())
+    tools = [t for t in data.setdefault("modules", {}).get("scripts-tool", [])
+             if t.get("path") != str(SCRIPT)]
+    mine = next((t for t in data["modules"].get("scripts-tool", [])
+                 if t.get("path") == str(SCRIPT)), {"path": str(SCRIPT), "settings": {}})
+    data["modules"]["scripts-tool"] = tools + [mine]
+    order = [s["name"] for s in data["scene_order"]]
+    data["scene_order"] = [{"name": n} for n in
+                           [n for n in want if n in order] + [n for n in order if n not in want]]
+    SCENE_FILE.write_text(json.dumps(data))
+    if not was_enabled:  # the WebSocket server was only needed for this setup
+        cfg = ws_settings()
+        cfg["server_enabled"] = False
+        WS_CONFIG.write_text(json.dumps(cfg, indent=2))
+    launch_obs()
+    if dead:
+        die(f"after restarting OBS these came back blank: {', '.join(dead)}. "
+            "If a share picker is on screen, choose that monitor in it.")
+    print(f"Set up. Scenes: {', '.join(want)}.")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="obs-screens", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("command", nargs="?", choices=["setup"], help="optional, the default")
+    ap.add_argument("--redo", action="store_true",
+                    help="bind every monitor source again from scratch")
+    args = ap.parse_args()
+    cmd_setup(monitors(), args.redo)
+
+
+if __name__ == "__main__":
+    main()

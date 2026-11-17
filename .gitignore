@@ -178,6 +178,11 @@
 !.local/bin/fontget
 !.local/bin/unseal
 !.local/bin/shokz
+!.local/bin/obs-screens
+# OBS: canvas follows the scene's monitors (the rest of obs-studio is machine state)
+!.config/obs-studio/
+!.config/obs-studio/scripts/
+!.config/obs-studio/scripts/fit-canvas.lua
 # omarchy 3.8.4 commands retired in omarchy 4 but still used by hypr/waybar scripts
 !.local/bin/walker
 !.local/bin/omarchy-launch-walker
