@@ -207,8 +207,8 @@ def items(obs):
 
 # Recording encoder, first one this machine has: AV1 before HEVC, on the GPU.
 # With no GPU encoder for either, x264 on the CPU (lighter than SVT-AV1 at
-# these sizes). GPU H.264 is not a candidate: NVENC stops at 4096 pixels and
-# two monitors side by side are 5120. Left: OBS encoder id as its log lists
+# these sizes). GPU H.264 is not a candidate: NVENC stops at 4096 pixels, less
+# than two 1440p monitors side by side. Left: OBS encoder id as its log lists
 # it. Right: the Settings > Output (Simple) recording encoder value.
 # Only the NVIDIA entries have been tried on real hardware.
 ENCODERS = (("obs_nvenc_av1_tex", "nvenc_av1"), ("av1_texture_amf", "amd_av1"),

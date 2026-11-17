@@ -2,13 +2,15 @@
 --
 -- Whenever the program scene changes, the canvas is resized to exactly fit
 -- the monitor sources visible in it and they are placed edge to edge at
--- native size. So a scene with one monitor records 2560x1440, a scene with
--- all four records 5120x2880, and there is never any scaling or black border.
+-- native size. So a scene with one monitor records at that monitor's size, a
+-- scene with several records at their combined size, and there is never any
+-- scaling or black border.
 -- After hiding or showing a monitor inside a scene, switch scenes or press
 -- "Fit now" in Tools > Scripts.
 --
 -- A "monitor source" is a Screen Capture (PipeWire) source named after a
--- Hyprland output (DP-1, HDMI-A-1, ...). Scenes with none are left alone.
+-- Hyprland output, as `hyprctl monitors` names it. Scenes with none are left
+-- alone.
 -- Monitors keep their desk arrangement when the visible ones form a full
 -- rectangle; otherwise (a diagonal pair, three of four) they go side by side.
 --
